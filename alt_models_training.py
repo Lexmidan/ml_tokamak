@@ -114,7 +114,7 @@ def train_and_test_alt_model(signal_name = 'divlp',
     # Observe that all parameters are being optimized
     optimizer = torch.optim.AdamW(untrained_model.parameters(), lr=learning_rate_min, weight_decay=weight_decay)
 
-    exp_lr_scheduler = lr_scheduler.OneCycleLR(optimizer, max_lr=learning_rate_max, total_steps=num_epochs) #!!!
+    exp_lr_scheduler = lr_scheduler.OneCycleLR(optimizer, max_lr=learning_rate_max, steps_per_epoch=dataset_sizes['train'], epochs=num_epochs) #!!!
 
     hyperparameters = {
     'batch_size': batch_size,

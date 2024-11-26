@@ -65,7 +65,7 @@ def train_and_test_ris_model(ris_option = 'both',
         shots_for_validation = shots_for_validation[:3]
         shots_for_training = shots_for_training[:3]
 
-    #
+    # Use only a fraction of the data
     shots_for_training = shots_for_training.sample(frac=data_frac, random_state=random_seed)
 
     shot_df, test_df, val_df, train_df = cmc.load_and_split_dataframes(path,shot_numbers, shots_for_training, shots_for_testing, 

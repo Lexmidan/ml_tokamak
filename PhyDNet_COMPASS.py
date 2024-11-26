@@ -8,6 +8,7 @@ from torchmetrics.classification import BinaryPrecision, BinaryRecall, F1Score
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 import numpy as np
+import xarray as xr
 from PIL import Image
 import json
 import time
@@ -48,10 +49,10 @@ class ImagesDataset(Dataset):
         prev_imgs = torch.tensor([]).to(self.device) #images from the past - input for the model
         for i in range(self.n_frames_input):
 
-            if idx-4*i<0 or idx-4*i>len(self.img_labels)-1:
+            if idx-2*i<0 or idx-2*i>len(self.img_labels)-1:
                 img_path = os.path.join(self.img_dir, self.img_labels.loc[idx, 'filename'])
             else:
-                img_path = os.path.join(self.img_dir, self.img_labels.loc[idx-4*i, 'filename']) #shift by 50 to avoid KeyError. They're black anyway.
+                img_path = os.path.join(self.img_dir, self.img_labels.loc[idx-2*i, 'filename']) #shift by 50 to avoid KeyError. They're black anyway.
             
             image = read_image(img_path).float().to(self.device)
             image = image[:,74:-74,144:-144] # crop the image 640x500 -> 352x352
@@ -72,7 +73,7 @@ class ImagesDataset(Dataset):
         return labeled_imgs_dict
     
 def train_on_batch(input_tensor, labels_tensor, classifier, criterion, 
-                   device = torch.device("cuda:0"), constraints = None):                
+                   device = torch.device("cuda:0"), constraints = None, save_name = None, save_weights = False, step=0):                
     
     # input_tensor : torch.Size([batch_size, input_length, channels, cols, rows])
     input_length  = input_tensor.size(1)
@@ -89,6 +90,38 @@ def train_on_batch(input_tensor, labels_tensor, classifier, criterion,
         filters = classifier.phycell.cell_list[0].F.conv1.weight[:,b,:,:] # (nb_filters,7,7)     
         m = k2m(filters.double()) 
         m  = m.float()  
+
+        if constraints is not None and save_weights:
+            filters_data = filters.detach().cpu().numpy()
+            m_data = m.detach().cpu().numpy()
+            constraints_data = constraints.detach().cpu().numpy()
+
+            # Create a DataFrame with the filter, m, k2m, and constraints data
+            data = {'filters': (['iter', 'in_channels', 'rows', 'cols'], np.expand_dims(filters_data, axis=0)),
+                    'm': (['iter', 'in_channels', 'rows', 'cols'], np.expand_dims(m_data, axis=0)),
+                    'constraints': (['iter', 'in_channels', 'rows', 'cols'], np.expand_dims(constraints_data, axis=0)),
+                    'b': (['iter', 'value'], np.expand_dims(np.array([b]), axis=0)),
+                    'step': (['iter', 'value'], np.expand_dims(np.array([step]), axis=0))}
+
+            if step < 9:
+                data_df = xr.Dataset(data_vars=data)
+            else:
+                old_df = xr.open_dataset(f'{save_name}_filter_data.nc')
+                
+                data_df = xr.concat([old_df, xr.Dataset(data_vars=data)], dim='iter')
+
+            save_path = f'{save_name}_filter_data.nc'
+            save_dir = os.path.dirname(save_path)
+
+            # Ensure the directory exists
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+
+
+            # Save the dataset to a NetCDF file
+            data_df.to_netcdf(save_path, mode='w')
+
+
         constraints_loss += nn.MSELoss()(m, constraints) # constrains is a precomputed matrix 
 
     loss += constraints_loss
@@ -142,7 +175,9 @@ def train_model(model, criterion, optimizer, scheduler:lr_scheduler, dataloaders
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
-                    outputs, loss, constraints_loss = train_on_batch(inputs, labels, model, criterion, constraints=constraints, device=device)
+                    outputs, loss, constraints_loss = train_on_batch(inputs, labels, model, criterion, constraints=constraints, 
+                                                                     device=device, save_weights=running_batch%4==0, save_name=chkpt_path.with_name(f'{chkpt_path.stem}'),
+                                                                     step=running_batch)
 
                     _, preds = torch.max(outputs, 1)
                     # backward + optimize only if in training phase
@@ -537,7 +572,7 @@ def train_and_eval_PhyDNet(batch_size=8, learning_rate_min=0.0001, learning_rate
 
 if __name__ == '__main__':
     mp.set_start_method('spawn')
-    train_and_eval_PhyDNet(batch_size=10, learning_rate_max=0.001, num_epochs=12,
-                           test_run=False, test_df_contains_val_df=True, n_frames_input=4, num_workers=4,
-                           weight_decay=1e-5, save_name='phydnet, changed loss, onecycleLR')
+    train_and_eval_PhyDNet(batch_size=8, learning_rate_max=0.001, num_epochs=12,
+                           test_run=True, test_df_contains_val_df=True, n_frames_input=5, num_workers=2,
+                           weight_decay=1e-5, save_name='phydnet, smaller time-diff, 5 images, onecycleLR')
     print('Done')

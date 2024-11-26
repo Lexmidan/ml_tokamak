@@ -550,11 +550,11 @@ def test_model(run_path,
         confusion_matrix_metric.update(y_hat_df, y_df)
         conf_matrix_fig, conf_matrix_ax  = confusion_matrix_metric.plot()
         #F1
-        f1 = f1_score(y_df, y_hat_df, average='binary' if num_classes==2 else 'micro')
+        f1 = f1_score(y_df, y_hat_df, average='binary' if num_classes==2 else 'macro')
 
         #Precision and recall
-        precision = precision_score(y_df, y_hat_df, average='binary' if num_classes==2 else 'micro')
-        recall = recall_score(y_df, y_hat_df, average='binary' if num_classes==2 else 'micro')
+        precision = precision_score(y_df, y_hat_df, average='binary' if num_classes==2 else 'macro')
+        recall = recall_score(y_df, y_hat_df, average='binary' if num_classes==2 else 'macro')
 
         #Precision_recall and ROC curves are generated using the pr_roc_auc()
         pr_roc = pr_roc_auc(y_df, softmax_out_df, task="binary" if num_classes==2 else 'ternary')
@@ -678,14 +678,14 @@ def per_shot_test(path, shots: list, results_df: pd.DataFrame,
             y_ris2 = torch.tensor(pred_for_shot_ris2['label'].values.astype(int))
 
             #Metrics
-            f1_ris1 = f1_score(y_ris1, y_hat_ris1, average='binary' if num_classes==2 else 'micro')
-            f1_ris2 = f1_score(y_ris2, y_hat_ris2, average='binary' if num_classes==2 else 'micro')
+            f1_ris1 = f1_score(y_ris1, y_hat_ris1, average='binary' if num_classes==2 else 'macro')
+            f1_ris2 = f1_score(y_ris2, y_hat_ris2, average='binary' if num_classes==2 else 'macro')
 
-            precision_ris1 = precision_score(y_ris1, y_hat_ris1, average='binary' if num_classes==2 else 'micro')
-            precision_ris2 = precision_score(y_ris2, y_hat_ris2, average='binary' if num_classes==2 else 'micro')
+            precision_ris1 = precision_score(y_ris1, y_hat_ris1, average='binary' if num_classes==2 else 'macro')
+            precision_ris2 = precision_score(y_ris2, y_hat_ris2, average='binary' if num_classes==2 else 'macro')
 
-            recall_ris1 = recall_score(y_ris1, y_hat_ris1, average='binary' if num_classes==2 else 'micro')
-            recall_ris2 = recall_score(y_ris2, y_hat_ris2, average='binary' if num_classes==2 else 'micro')
+            recall_ris1 = recall_score(y_ris1, y_hat_ris1, average='binary' if num_classes==2 else 'macro')
+            recall_ris2 = recall_score(y_ris2, y_hat_ris2, average='binary' if num_classes==2 else 'macro')
 
             conf_time_ax.set_title(f'Shot {shot}, RIS1/RIS2: kappa = {kappa1:.2f}/{kappa2:.2f}, F1 = {f1_ris1:.2f}/{f1_ris2:.2f}, Precision = {precision_ris1:.2f}/{precision_ris2:.2f}, Recall = {recall_ris1:.2f}/{recall_ris2:.2f}')
             

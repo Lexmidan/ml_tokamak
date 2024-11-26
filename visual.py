@@ -213,7 +213,7 @@ def visualize(path_to_run, shot,  figure_vertical_size, figure_horizontal_size, 
             conf_time_ax[1].set_title(signal_columns[0])
             conf_time_ax[1].set_ylabel(f'{signal_columns[0]}')
             conf_time_ax[1].set_xlabel('Time [ms]')
-            conf_time_ax[1].set_ylim(-percentile, percentile)
+            conf_time_ax[1].set_ylim(0.1*percentile, 3*percentile)
             
             
             #conf_time_ax[1].set_xlim(time_for_signal - exp_decaying(zoom_signal), time_for_signal + exp_decaying(zoom_signal))
@@ -230,6 +230,7 @@ def visualize(path_to_run, shot,  figure_vertical_size, figure_horizontal_size, 
         #Else plot all signals (There may be 4 of them)
         else:
             for i, col in enumerate(signal_columns, 1):
+                print('col is ', col)
                 percentile = signal_df[col].quantile(1-exp_decaying(zoom_signal)/1000)
                 #tretile = signal_df[col].quantile(.15)
                 # Assuming you have data to plot related to 'col'
@@ -241,7 +242,8 @@ def visualize(path_to_run, shot,  figure_vertical_size, figure_horizontal_size, 
                 conf_time_ax[i].set_ylim(-percentile, percentile)
                 conf_time_ax[i].vlines(time_for_signal, 0, percentile, color='black', linestyle='--')
                 if col=='h_alpha':
-                    conf_time_ax[i].set_ylim(0, percentile)
+                    print('col is h_alpha, percentile is', percentile)
+                    conf_time_ax[i].set_ylim(0.1*percentile, 3*percentile)
                 else:
                     conf_time_ax[i].set_ylim(-percentile, percentile)
             #Plot the signal window on main figure
