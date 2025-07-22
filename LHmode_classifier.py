@@ -1,9 +1,11 @@
 import os
 import re
 import time 
+import logging
 from pathlib import Path
 import json
 from datetime import datetime
+from typing import Dict, Tuple, Optional, Union
 
 import matplotlib.pyplot as plt
 from torch import cuda
@@ -19,88 +21,141 @@ from torchvision.models.resnet import ResNet50_Weights, ResNet34_Weights, ResNet
 
 import confinement_mode_classifier as cmc
 
-def train_and_test_ris_model(ris_option = 'both',
-                            pretrained_model = torchvision.models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1),
-                            num_workers = 32,
-                            num_epochs_for_fc = 10,
-                            num_epochs_for_all_layers = 10,
-                            num_classes = 3,
-                            batch_size = 32,
-                            learning_rate_min = 0.001,
-                            learning_rate_max = 0.01,
-                            comment_for_model_name = f', 3 output classes',
-                            random_seed = 42,
-                            augmentation = False,
-                            test_df_contains_val_df=True,
-                            test_run = False,
-                            exponential_elm_decay=True,
-                            grayscale=False,
-                            weight_decay=1e-4,
-                            data_frac=1.0):
+
+def setup_logging(log_dir: Path, phase: str = None) -> logging.Logger:
+    """
+    Setup logging to save logs to the model directory.
     
+    Args:
+        log_dir: Directory where logs should be saved
+        phase: Training phase (e.g., 'last_fc', 'all_layers')
+        
+    Returns:
+        Configured logger
     """
-    Trains a one ris model. The model is trained on RIS1 images or RIS2 images.
+    # Create logs directory if it doesn't exist
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Setup logger
+    logger = logging.getLogger('LHmode_classifier')
+    logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers
+    logger.handlers.clear()
+    
+    # Create file handler
+    log_file = log_dir / f'training_log_{phase}.log' if phase else log_dir / 'training_log.log'
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.INFO)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    
+    # Create formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+    
+    # Add handlers to logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+
+def load_shot_data(path: Path, ris_option: str, test_df_contains_val_df: bool = True, 
+                  test_run: bool = False, data_frac: float = 1.0, 
+                  random_seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-
-    comment_for_model_name = ris_option + comment_for_model_name
-    pl.seed_everything(random_seed)
-
-    path = Path(os.getcwd())
-    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-
-
-    #### Create dataloaders ########################################
+    Load and split shot data for training, validation, and testing.
+    
+    Args:
+        path: Path to the data directory
+        ris_option: 'RIS1', 'RIS2', or 'both'
+        test_df_contains_val_df: Whether to include validation shots in test set
+        test_run: Whether to run with limited data for testing
+        data_frac: Fraction of training data to use
+        random_seed: Random seed for reproducibility
+        
+    Returns:
+        Tuple of (shots_for_testing, shots_for_validation, shots_for_training, combined_data)
+    """
+    logger = logging.getLogger('LHmode_classifier')
+    logger.info(f"Loading shot data for {ris_option} option...")
+    
     shot_usage = pd.read_csv(f'{path}/data/shot_usageNEW.csv')
-    shot_for_ris = shot_usage[shot_usage['used_for_ris2'] if ris_option == 'RIS2' else shot_usage['used_for_ris1']]
-    shot_numbers = shot_for_ris['shot']
+    
+    # Load RIS1 data
+    shot_for_ris = shot_usage[shot_usage['used_for_ris1']]
+    if ris_option == 'RIS2':
+        shot_for_ris = shot_usage[shot_usage['used_for_ris2']]
+    
     shots_for_testing = shot_for_ris[shot_for_ris['used_as'] == 'test']['shot']
     shots_for_validation = shot_for_ris[shot_for_ris['used_as'] == 'val']['shot']
     shots_for_training = shot_for_ris[shot_for_ris['used_as'] == 'train']['shot']
-
+    
     if test_df_contains_val_df:
         shots_for_testing = pd.concat([shots_for_testing, shots_for_validation])
-
+    
     if test_run:
         shots_for_testing = shots_for_testing[:3]
         shots_for_validation = shots_for_validation[:3]
         shots_for_training = shots_for_training[:3]
-
-    # Use only a fraction of the data
-    shots_for_training = shots_for_training.sample(frac=data_frac, random_state=random_seed)
-
-    shot_df, test_df, val_df, train_df = cmc.load_and_split_dataframes(path,shot_numbers, shots_for_training, shots_for_testing, 
-                                                                    shots_for_validation, use_ELMS=num_classes==3, ris_option=ris_option,
-                                                                    exponential_elm_decay=exponential_elm_decay)
+        logger.info("Running in test mode with limited data (3 shots each)")
     
+    shots_for_training = shots_for_training.sample(frac=data_frac, random_state=random_seed)
+    
+    logger.info(f"Data split complete - Training: {len(shots_for_training)}, "
+                f"Validation: {len(shots_for_validation)}, Testing: {len(shots_for_testing)}")
+    
+    return shots_for_testing, shots_for_validation, shots_for_training
+
+
+def create_dataloaders(path: Path, shots_for_training: pd.DataFrame, shots_for_testing: pd.DataFrame,
+                      shots_for_validation: pd.DataFrame, ris_option: str, num_classes: int,
+                      exponential_elm_decay: bool, batch_size: int, num_workers: int,
+                      augmentation: bool, grayscale: bool) -> Tuple[Dict, Dict]:
+    """
+    Create training, validation, and test dataloaders.
+    
+    Returns:
+        Tuple of (dataloaders dict, dataset_sizes dict, test_dataloader)
+    """
+    logger = logging.getLogger('LHmode_classifier')
+    logger.info(f"Creating dataloaders with batch_size={batch_size}, num_workers={num_workers}")
+    logger.info(f"Configuration: ris_option={ris_option}, num_classes={num_classes}, "
+                f"augmentation={augmentation}, grayscale={grayscale}")
+    
+    shot_numbers = pd.concat([shots_for_training, shots_for_testing, shots_for_validation])
+    
+    # Handle the 'both' case properly
     if ris_option == 'both':
-        shot_for_ris2 = shot_usage[shot_usage['used_for_ris2']]
-        shot_numbers_ris2 = shot_for_ris2['shot']
-        shots_for_testing_ris2 = shot_for_ris2[shot_for_ris2['used_as'] == 'test']['shot']
-        shots_for_validation_ris2 = shot_for_ris2[shot_for_ris2['used_as'] == 'val']['shot']
-        shots_for_training_ris2 = shot_for_ris2[shot_for_ris2['used_as'] == 'train']['shot']
-
-        if test_df_contains_val_df:
-            shots_for_testing_ris2 = pd.concat([shots_for_testing_ris2, shots_for_validation_ris2])
-
-        if test_run:
-            shots_for_testing_ris2 = shots_for_testing_ris2[:3]
-            shots_for_validation_ris2 = shots_for_validation_ris2[:3]
-            shots_for_training_ris2 = shots_for_training_ris2[:3]
-
-        shots_for_training_ris2 = shots_for_training_ris2.sample(frac=data_frac, random_state=random_seed)
-
-        shot_df_ris2, test_df_ris2, val_df_ris2, train_df_ris2 = cmc.load_and_split_dataframes(path,shot_numbers_ris2, shots_for_training_ris2, shots_for_testing_ris2, 
-                                                                        shots_for_validation_ris2, use_ELMS=num_classes==3, ris_option='RIS2',
-                                                                        exponential_elm_decay=exponential_elm_decay)
-
+        logger.info("Loading data for both RIS1 and RIS2...")
+        # For 'both', we need to load RIS1 data first, then combine with RIS2
+        shot_df, test_df, val_df, train_df = cmc.load_and_split_dataframes(
+            path, shot_numbers, shots_for_training, shots_for_testing, 
+            shots_for_validation, use_ELMS=num_classes==3, ris_option='RIS1',
+            exponential_elm_decay=exponential_elm_decay)
+        
+        # Load RIS2 data and combine
+        shot_df_ris2, test_df_ris2, val_df_ris2, train_df_ris2 = cmc.load_and_split_dataframes(
+            path, shot_numbers, shots_for_training, shots_for_testing, 
+            shots_for_validation, use_ELMS=num_classes==3, ris_option='RIS2',
+            exponential_elm_decay=exponential_elm_decay)
+        
         test_df = pd.concat([test_df, test_df_ris2]).reset_index(drop=True)
         val_df = pd.concat([val_df, val_df_ris2]).reset_index(drop=True)
         train_df = pd.concat([train_df, train_df_ris2]).reset_index(drop=True)
-
-        shots_for_testing = pd.concat([shots_for_testing, shots_for_testing_ris2]).reset_index(drop=True)
-        shots_for_validation = pd.concat([shots_for_validation, shots_for_validation_ris2]).reset_index(drop=True)
-        shots_for_training = pd.concat([shots_for_training, shots_for_training_ris2]).reset_index(drop=True)
-
+        logger.info("Combined RIS1 and RIS2 data successfully")
+    else:
+        logger.info(f"Loading data for {ris_option}...")
+        shot_df, test_df, val_df, train_df = cmc.load_and_split_dataframes(
+            path, shot_numbers, shots_for_training, shots_for_testing, 
+            shots_for_validation, use_ELMS=num_classes==3, ris_option=ris_option,
+            exponential_elm_decay=exponential_elm_decay)
+    
+    logger.info("Creating dataloaders...")
     test_dataloader = cmc.get_dloader(test_df, path, batch_size, balance_data=False, 
                                       shuffle=False, num_workers=num_workers, 
                                       augmentation=False, grayscale=grayscale)
@@ -113,195 +168,470 @@ def train_and_test_ris_model(ris_option = 'both',
                                        shuffle=False, num_workers=num_workers, 
                                        augmentation=augmentation, grayscale=grayscale)
 
-    dataloaders = {'train':train_dataloader, 'val':val_dataloader}
+    dataloaders = {'train': train_dataloader, 'val': val_dataloader}
     dataset_sizes = {x: len(dataloaders[x].dataset) for x in ['train', 'val']}
+    
+    logger.info(f"Dataloaders created successfully - Train: {dataset_sizes['train']} samples, "
+                f"Val: {dataset_sizes['val']} samples, Test: {len(test_dataloader.dataset)} samples")
+    
+    return dataloaders, dataset_sizes, test_dataloader
 
-    #### Create model and train it #################################
-    timestamp =  datetime.fromtimestamp(time.time()).strftime("%y-%m-%d, %H-%M-%S ") + comment_for_model_name
-    writer = SummaryWriter(f'runs/{timestamp}_last_fc')
 
-    # Load a pretrained model and reset final fully connected layer.
+def prepare_model_for_grayscale(model: nn.Module, device: torch.device) -> nn.Module:
+    """
+    Modify the first convolutional layer of a pretrained model to accept grayscale input.
+    """
+    # Luminance weights for RGB to grayscale conversion
+    weights_rgb_to_gray = torch.tensor([0.2989, 0.5870, 0.1140]).view(1, 3, 1, 1).to(device)
+
+    # Get the original weights of the first conv layer
+    original_weights = model.conv1.weight.data
+
+    # Compute the weighted sum of the RGB channels
+    grayscale_weights = (original_weights * weights_rgb_to_gray).sum(dim=1, keepdim=True)
+
+    # Update the first convolutional layer
+    model.conv1 = nn.Conv2d(
+        in_channels=1,
+        out_channels=model.conv1.out_channels,
+        kernel_size=model.conv1.kernel_size,
+        stride=model.conv1.stride,
+        padding=model.conv1.padding,
+        bias=model.conv1.bias is not None)
+
+    # Assign the new grayscale weights to the first conv layer
+    model.conv1.weight = nn.Parameter(grayscale_weights)
+
+    # If there is a bias term, keep it unchanged
+    if model.conv1.bias is not None:
+        model.conv1.bias = nn.Parameter(model.conv1.bias.data)
+    
+    return model
+
+
+def setup_model(pretrained_model: nn.Module, num_classes: int, device: torch.device, 
+                grayscale: bool = False) -> nn.Module:
+    """
+    Setup the pretrained model for transfer learning.
+    """
+    logger = logging.getLogger('LHmode_classifier')
+    logger.info(f"Setting up model for {num_classes} classes on device: {device}")
+    
+    # Freeze all parameters initially
     for param in pretrained_model.parameters():
         param.requires_grad = False
     
-    # Parameters of newly constructed modules have requires_grad=True by default
+    # Replace the final fully connected layer
     num_ftrs = pretrained_model.fc.in_features
-    pretrained_model.fc = nn.Linear(num_ftrs, num_classes) #3 classes: L-mode, H-mode, ELM
+    pretrained_model.fc = nn.Linear(num_ftrs, num_classes)
     pretrained_model = pretrained_model.to(device)
 
     if grayscale:
-        # Luminance weights for RGB to grayscale conversion
-        weights_rgb_to_gray = torch.tensor([0.2989, 0.5870, 0.1140]).view(1, 3, 1, 1).to(device)
-
-        # Get the original weights of the first conv layer
-        original_weights = pretrained_model.conv1.weight.data
-
-        # Compute the weighted sum of the RGB channels
-        grayscale_weights = (original_weights * weights_rgb_to_gray).sum(dim=1, keepdim=True)
-
-        # Update the first convolutional layer
-        pretrained_model.conv1 = nn.Conv2d(
-            in_channels=1,
-            out_channels=pretrained_model.conv1.out_channels,
-            kernel_size=pretrained_model.conv1.kernel_size,
-            stride=pretrained_model.conv1.stride,
-            padding=pretrained_model.conv1.padding,
-            bias=pretrained_model.conv1.bias is not None)
-
-        # Assign the new grayscale weights to the first conv layer
-        pretrained_model.conv1.weight = nn.Parameter(grayscale_weights)
-
-        # If there is a bias term, keep it unchanged
-        if pretrained_model.conv1.bias is not None:
-            pretrained_model.conv1.bias = nn.Parameter(pretrained_model.conv1.bias.data)
-
-    # Loss function
-    criterion = nn.CrossEntropyLoss()
-
-    # Observe that all parameters are being optimized
-    optimizer = torch.optim.AdamW(pretrained_model.parameters(), lr=learning_rate_min, weight_decay=weight_decay)
-
-    # Decay LR by a factor of 0.1 every 7 epochs
-    exp_lr_scheduler = lr_scheduler.OneCycleLR(optimizer, max_lr=learning_rate_max, steps_per_epoch=dataset_sizes['train'], epochs=num_epochs_for_fc) #!!!
-
-    # Model will be saved to this folder along with metrics and tensorboard scalars
-    model_path = Path(f'{path}/runs/{timestamp}_last_fc/model.pt')
-
-    #### Train the last fully connected layer########################
-    model = cmc.train_model(pretrained_model, criterion, optimizer, exp_lr_scheduler, 
-                        dataloaders, writer, dataset_sizes, num_epochs=num_epochs_for_fc, 
-                        chkpt_path=model_path.with_name(f'{model_path.stem}_best_val_acc{model_path.suffix}'),
-                        return_best_model=False)
+        logger.info("Adapting model for grayscale input")
+        pretrained_model = prepare_model_for_grayscale(pretrained_model, device)
+    
+    logger.info("Model setup complete")
+    return pretrained_model
 
 
-    hyperparameters = {
-    'model': model.__class__.__name__,
-    'batch_size': batch_size,
-    'num_epochs': num_epochs_for_fc,
-    'optimizer': optimizer.__class__.__name__,
-    'criterion': criterion.__class__.__name__,
-    'learning_rate_max': learning_rate_max,
-    'scheduler': exp_lr_scheduler.__class__.__name__,
-    'shots_for_testing': torch.tensor(shots_for_testing.values.tolist()),
-    'shots_for_validation': torch.tensor(shots_for_validation.values.tolist()),
-    'shots_for_training': torch.tensor(shots_for_training.values.tolist()),
-    'ris_option': ris_option,
-    'num_classes': num_classes,
-    'second_image': 'None',
-    'augmentation': "applied" if augmentation else "no augmentation",
-    'random_seed': random_seed,
-    'weight_decay':weight_decay
+def create_optimizer_and_scheduler(model: nn.Module, learning_rate_min: float, 
+                                  learning_rate_max: float, weight_decay: float,
+                                  dataset_size: int, num_epochs: int):
+    """
+    Create optimizer and learning rate scheduler.
+    """
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate_min, weight_decay=weight_decay)
+    exp_lr_scheduler = lr_scheduler.OneCycleLR(
+        optimizer, max_lr=learning_rate_max, 
+        steps_per_epoch=dataset_size, epochs=num_epochs)
+    
+    return optimizer, exp_lr_scheduler
+
+
+def save_hyperparameters_and_metrics(path: Path, timestamp: str, phase: str, 
+                                    hyperparameters: Dict, metrics: Dict, writer: SummaryWriter,
+                                    base_dir: str = 'runs'):
+    """
+    Save hyperparameters and metrics to JSON file and TensorBoard.
+    """
+    # Create a copy of hyperparameters for TensorBoard (excluding problematic keys)
+    tb_hyperparameters = {}
+    json_hyperparameters = {}
+    
+    for key, value in hyperparameters.items():
+        # Convert tensors and arrays to lists for JSON serialization
+        if hasattr(value, 'tolist'):
+            json_hyperparameters[key] = value.tolist()
+        else:
+            json_hyperparameters[key] = value
+        
+        # Only include simple types for TensorBoard
+        if key not in ['shots_for_testing', 'shots_for_validation', 'shots_for_training']:
+            if isinstance(value, (int, float, str, bool)) or (hasattr(value, 'item') and callable(getattr(value, 'item'))):
+                if hasattr(value, 'item'):
+                    tb_hyperparameters[key] = value.item()
+                else:
+                    tb_hyperparameters[key] = value
+    
+    one_digit_metrics = {
+        'Accuracy on test_dataset': metrics['accuracy'], 
+        'F1 metric on test_dataset': metrics['f1'], 
+        'Precision on test_dataset': metrics['precision'], 
+        'Recall on test_dataset': metrics['recall']
     }
     
+    writer.add_hparams(tb_hyperparameters, one_digit_metrics)
     
-    torch.save(model.state_dict(), model_path)
-
-    #### Test the model############################################
-    metrics = cmc.test_model(f'runs/{timestamp}_last_fc', model, test_dataloader, comment='', 
-                             writer=writer, num_classes=num_classes, signal_name='img')
-
-    metrics['prediction_df'].to_csv(f'{path}/runs/{timestamp}_last_fc/prediction_df.csv')
-
-    metrics_per_shot = cmc.per_shot_test(path=f'{path}/runs/{timestamp}_last_fc/', 
-                                shots=shots_for_testing.values.tolist(), 
-                                results_df=metrics['prediction_df'], 
-                                writer=writer,
-                                num_classes=num_classes,
-                                two_images=ris_option=='both')
-
-    pd.DataFrame(metrics_per_shot).to_csv(f'{path}/runs/{timestamp}_last_fc/metrics_per_shot.csv')
-
-    one_digit_metrics = {'Accuracy on test_dataset': metrics['accuracy'], 
-                        'F1 metric on test_dataset':metrics['f1'].tolist(), 
-                        'Precision on test_dataset':metrics['precision'].tolist(), 
-                        'Recall on test_dataset':metrics['recall'].tolist()}
-
-    writer.add_hparams(hyperparameters, one_digit_metrics)
-    writer.close()
-    
-    # Save hyperparameters and metrics to a JSON file
-    for key in ['shots_for_testing', 'shots_for_validation', 'shots_for_training']:
-        hyperparameters[key] = hyperparameters[key].tolist()  # Convert tensors to lists
-    all_hparams = {**hyperparameters, **one_digit_metrics}
-    # Convert to JSON
+    # Save to JSON
+    all_hparams = {**json_hyperparameters, **one_digit_metrics}
     json_str = json.dumps(all_hparams, indent=4)
-    with open(f'{path}/runs/{timestamp}_last_fc/hparams.json', 'w') as f:
+    with open(f'{path}/{base_dir}/{timestamp}_{phase}/hparams.json', 'w') as f:
         f.write(json_str)
 
-    #### Train the whole model######################################
-    torch.cuda.empty_cache()
 
-    # Loss function
-    criterion = nn.CrossEntropyLoss()
-
-    # Observe that all parameters are being optimized
-    optimizer = torch.optim.AdamW(pretrained_model.parameters(), lr=learning_rate_min, weight_decay=1e-4)
-
-    # Decay LR by a factor of 0.1 every 7 epochs
-    exp_lr_scheduler = lr_scheduler.OneCycleLR(optimizer, max_lr=learning_rate_max, steps_per_epoch=dataset_sizes['train'], epochs=num_epochs_for_all_layers) #!!!
-
-    writer = SummaryWriter(f'runs/{timestamp}_all_layers')
+def train_phase(model: nn.Module, dataloaders: Dict, dataset_sizes: Dict, 
+               timestamp: str, path: Path, phase: str, num_epochs: int,
+               learning_rate_min: float, learning_rate_max: float, 
+               weight_decay: float, freeze_backbone: bool = True,
+               base_dir: str = 'runs') -> nn.Module:
+    """
+    Train the model for a specific phase (either just FC layer or all layers).
+    
+    Args:
+        model: The model to train
+        dataloaders: Dictionary containing train and val dataloaders
+        dataset_sizes: Dictionary containing dataset sizes
+        timestamp: Timestamp for model naming
+        path: Base path for saving
+        phase: 'last_fc' or 'all_layers'
+        num_epochs: Number of epochs to train
+        learning_rate_min: Minimum learning rate
+        learning_rate_max: Maximum learning rate
+        weight_decay: Weight decay for optimizer
+        freeze_backbone: Whether to freeze backbone (True for FC-only training)
+        base_dir: Base directory for saving models and logs (default: 'runs')
+        
+    Returns:
+        Trained model
+    """
+    logger = logging.getLogger('LHmode_classifier')
+    phase_name = "FC layer only" if phase == 'last_fc' else "all layers"
+    logger.info(f"Starting training phase: {phase_name} for {num_epochs} epochs")
+    logger.info(f"Learning rate range: {learning_rate_min} to {learning_rate_max}, weight_decay: {weight_decay}")
+    
+    writer = SummaryWriter(f'{base_dir}/{timestamp}_{phase}')
+    
+    # Set parameter gradients based on training phase
     for param in model.parameters():
+        param.requires_grad = not freeze_backbone
+    
+    # Always allow gradients for the final layer
+    for param in model.fc.parameters():
         param.requires_grad = True
+    
+    # Setup training components
+    criterion = nn.CrossEntropyLoss()
+    optimizer, exp_lr_scheduler = create_optimizer_and_scheduler(
+        model, learning_rate_min, learning_rate_max, weight_decay,
+        dataset_sizes['train'], num_epochs)
+    
+    # Model save path
+    model_path = Path(f'{path}/{base_dir}/{timestamp}_{phase}/model.pt')
+    chkpt_path = model_path.with_name(f'{model_path.stem}_best_val_acc{model_path.suffix}')
+    
+    logger.info(f"Model will be saved to: {model_path}")
+    
+    # Train the model
+    logger.info("Starting model training...")
+    model = cmc.train_model(
+        model, criterion, optimizer, exp_lr_scheduler, 
+        dataloaders, writer, dataset_sizes, num_epochs=num_epochs, 
+        chkpt_path=chkpt_path,
+        return_best_model=False)
+    
+    # Save model
+    torch.save(model.state_dict(), model_path)
+    logger.info(f"Training phase {phase_name} completed and model saved")
+    
+    writer.close()
+    return model
+
+
+def test_and_save_results(model: nn.Module, test_dataloader, path: Path, timestamp: str, 
+                         phase: str, shots_for_testing: pd.DataFrame, num_classes: int,
+                         ris_option: str, hyperparameters: Dict, base_dir: str = 'runs'):
+    """
+    Test the model and save results including predictions and metrics.
+    """
+    logger = logging.getLogger('LHmode_classifier')
+    logger.info(f"Starting model testing for phase: {phase}")
+    
+    writer = SummaryWriter(f'{base_dir}/{timestamp}_{phase}')
+    
+    # Test the model
+    logger.info("Running model evaluation on test dataset...")
+    metrics = cmc.test_model(
+        f'{base_dir}/{timestamp}_{phase}', model, test_dataloader, comment='', 
+        writer=writer, num_classes=num_classes, signal_name='img')
+
+    # Save predictions
+    prediction_path = f'{path}/{base_dir}/{timestamp}_{phase}/prediction_df.csv'
+    metrics['prediction_df'].to_csv(prediction_path)
+    logger.info(f"Predictions saved to: {prediction_path}")
+
+    # Per-shot analysis
+    logger.info("Performing per-shot analysis...")
+    metrics_per_shot = cmc.per_shot_test(
+        path=f'{path}/{base_dir}/{timestamp}_{phase}/', 
+        shots=shots_for_testing.values.tolist(), 
+        results_df=metrics['prediction_df'], 
+        writer=writer,
+        num_classes=num_classes,
+        two_images=ris_option=='both')
+
+    metrics_path = f'{path}/{base_dir}/{timestamp}_{phase}/metrics_per_shot.csv'
+    pd.DataFrame(metrics_per_shot).to_csv(metrics_path)
+    logger.info(f"Per-shot metrics saved to: {metrics_path}")
+    
+    # Save hyperparameters and metrics
+    logger.info("Saving hyperparameters and final metrics...")
+    save_hyperparameters_and_metrics(path, timestamp, phase, hyperparameters, metrics, writer, base_dir)
+    
+    # Log key metrics
+    logger.info(f"Test Results - Accuracy: {metrics['accuracy']:.4f}, "
+                f"F1: {metrics['f1']:.4f}")
+    
+    writer.close()
+    return metrics
+
+
+def create_model_from_config(model_name: str, weights: Optional[str] = None) -> nn.Module:
+    """
+    Create a model from configuration string.
+    
+    Args:
+        model_name: Name of the model ('resnet18', 'resnet34', etc.)
+        weights: Weights to use (if None, uses default pretrained weights)
+        
+    Returns:
+        Pretrained model
+    """
+    model_mapping = {
+        'resnet18': (torchvision.models.resnet18, ResNet18_Weights.IMAGENET1K_V1),
+        'resnet34': (torchvision.models.resnet34, ResNet34_Weights.IMAGENET1K_V1),
+        'resnet50': (torchvision.models.resnet50, ResNet50_Weights.IMAGENET1K_V1),
+        'resnet101': (torchvision.models.resnet101, ResNet101_Weights.IMAGENET1K_V1),
+        'resnet152': (torchvision.models.resnet152, ResNet152_Weights.IMAGENET1K_V1),
+    }
+    
+    if model_name not in model_mapping:
+        raise ValueError(f"Model {model_name} not supported. Available: {list(model_mapping.keys())}")
+    
+    model_fn, default_weights = model_mapping[model_name]
+    weights_to_use = weights or default_weights
+    
+    return model_fn(weights=weights_to_use)
+
+def train_and_test_ris_model(ris_option: str = 'both',
+                            pretrained_model=torchvision.models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1),
+                            num_workers: int = 32,
+                            num_epochs_for_fc: int = 10,
+                            num_epochs_for_all_layers: int = 10,
+                            num_classes: int = 3,
+                            batch_size: int = 32,
+                            learning_rate_min: float = 0.001,
+                            learning_rate_max: float = 0.01,
+                            comment_for_model_name: str = ', 3 output classes',
+                            random_seed: int = 42,
+                            augmentation: bool = False,
+                            test_df_contains_val_df: bool = True,
+                            test_run: bool = False,
+                            exponential_elm_decay: bool = True,
+                            grayscale: bool = False,
+                            weight_decay: float = 1e-4,
+                            data_frac: float = 1.0) -> Tuple[nn.Module, Path]:
+    """
+    Trains a RIS model with transfer learning in two phases:
+    1. Train only the final fully connected layer
+    2. Fine-tune all layers
+    
+    Args:
+        ris_option: 'RIS1', 'RIS2', or 'both'
+        pretrained_model: Pretrained model to use as backbone
+        num_workers: Number of workers for data loading
+        num_epochs_for_fc: Epochs for training only FC layer
+        num_epochs_for_all_layers: Epochs for fine-tuning all layers
+        num_classes: Number of output classes
+        batch_size: Batch size for training
+        learning_rate_min: Minimum learning rate
+        learning_rate_max: Maximum learning rate for OneCycle scheduler
+        comment_for_model_name: Comment to add to model name
+        random_seed: Random seed for reproducibility
+        augmentation: Whether to apply data augmentation
+        test_df_contains_val_df: Whether to include validation shots in test set
+        test_run: Whether to run with limited data for testing
+        exponential_elm_decay: Whether to apply exponential ELM decay
+        grayscale: Whether to use grayscale images
+        weight_decay: Weight decay for optimizer
+        data_frac: Fraction of training data to use
+        
+    Returns:
+        Tuple of (trained_model, model_path)
+    """
+    # Setup
+    comment_for_model_name = ris_option + comment_for_model_name
+    pl.seed_everything(random_seed)
+    path = Path(os.getcwd())
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+    timestamp = datetime.fromtimestamp(time.time()).strftime("%y-%m-%d, %H-%M-%S ") + comment_for_model_name
+
+    # Setup logging - create a temporary logger for initial setup
+    temp_log_dir = Path(f'{path}/runs/{timestamp}_setup')
+    logger = setup_logging(temp_log_dir)
+    
+    logger.info("="*60)
+    logger.info("STARTING L-H MODE CLASSIFIER TRAINING")
+    logger.info("="*60)
+    logger.info(f"Configuration:")
+    logger.info(f"  - RIS option: {ris_option}")
+    logger.info(f"  - Model: {pretrained_model.__class__.__name__}")
+    logger.info(f"  - Device: {device}")
+    logger.info(f"  - Timestamp: {timestamp}")
+    logger.info(f"  - Epochs (FC/All): {num_epochs_for_fc}/{num_epochs_for_all_layers}")
+    logger.info(f"  - Batch size: {batch_size}, Workers: {num_workers}")
+    logger.info(f"  - Learning rate: {learning_rate_min} to {learning_rate_max}")
+
+    # Load and prepare data
+    logger.info("Phase 1/5: Loading and preparing data...")
+    shots_for_testing, shots_for_validation, shots_for_training = load_shot_data(
+        path, 'RIS1' if ris_option == 'both' else ris_option, 
+        test_df_contains_val_df, test_run, data_frac, random_seed)
+    
+    # Handle 'both' option by combining RIS1 and RIS2 data
+    if ris_option == 'both':
+        logger.info("Loading additional RIS2 data for 'both' option...")
+        shots_for_testing_ris2, shots_for_validation_ris2, shots_for_training_ris2 = load_shot_data(
+            path, 'RIS2', test_df_contains_val_df, test_run, data_frac, random_seed)
+        
+        shots_for_testing = pd.concat([shots_for_testing, shots_for_testing_ris2]).reset_index(drop=True)
+        shots_for_validation = pd.concat([shots_for_validation, shots_for_validation_ris2]).reset_index(drop=True)
+        shots_for_training = pd.concat([shots_for_training, shots_for_training_ris2]).reset_index(drop=True)
+        logger.info("Combined RIS1 and RIS2 shot data")
+
+    # Create dataloaders
+    logger.info("Phase 2/5: Creating dataloaders...")
+    dataloaders, dataset_sizes, test_dataloader = create_dataloaders(
+        path, shots_for_training, shots_for_testing, shots_for_validation,
+        ris_option, num_classes, exponential_elm_decay, batch_size, 
+        num_workers, augmentation, grayscale)
+
+    # Setup model
+    logger.info("Phase 3/5: Setting up model...")
+    model = setup_model(pretrained_model, num_classes, device, grayscale)
+
+    # Create base hyperparameters dictionary
+    base_hyperparameters = {
+        'model': model.__class__.__name__,
+        'batch_size': batch_size,
+        'ris_option': ris_option,
+        'num_classes': num_classes,
+        'second_image': 'None',
+        'augmentation': "applied" if augmentation else "no augmentation",
+        'random_seed': random_seed,
+        'weight_decay': weight_decay,
+        'shots_for_testing': shots_for_testing.values.tolist(),
+        'shots_for_validation': shots_for_validation.values.tolist(),
+        'shots_for_training': shots_for_training.values.tolist(),
+    }
+
+    # Phase 1: Train only the fully connected layer
+    logger.info("Phase 4a/5: Training fully connected layer...")
+    logger.info("-" * 40)
+    
+    # Setup logging for FC phase
+    fc_log_dir = Path(f'{path}/runs/{timestamp}_last_fc')
+    setup_logging(fc_log_dir, 'last_fc')
+    
+    model = train_phase(
+        model, dataloaders, dataset_sizes, timestamp, path, 'last_fc',
+        num_epochs_for_fc, learning_rate_min, learning_rate_max, weight_decay,
+        freeze_backbone=True)
+
+    # Test after FC training
+    fc_hyperparameters = {
+        **base_hyperparameters,
+        'num_epochs': num_epochs_for_fc,
+        'optimizer': 'AdamW',
+        'criterion': 'CrossEntropyLoss',
+        'learning_rate_max': learning_rate_max,
+        'scheduler': 'OneCycleLR',
+    }
+    
+    logger.info("Testing FC-only model...")
+    test_and_save_results(
+        model, test_dataloader, path, timestamp, 'last_fc',
+        shots_for_testing, num_classes, ris_option, fc_hyperparameters)
+
+    # Phase 2: Fine-tune all layers
+    logger.info("Phase 4b/5: Fine-tuning all layers...")
+    logger.info("-" * 40)
+    torch.cuda.empty_cache()
+    
+    # Setup logging for all layers phase
+    all_layers_log_dir = Path(f'{path}/runs/{timestamp}_all_layers')
+    setup_logging(all_layers_log_dir, 'all_layers')
+    
+    model = train_phase(
+        model, dataloaders, dataset_sizes, timestamp, path, 'all_layers',
+        num_epochs_for_all_layers, learning_rate_min, learning_rate_max, weight_decay,
+        freeze_backbone=False)
+
+    # Test after full training
+    all_layers_hyperparameters = {
+        **base_hyperparameters,
+        'num_epochs': num_epochs_for_all_layers,
+        'optimizer': 'AdamW',
+        'criterion': 'CrossEntropyLoss',
+        'learning_rate_max': learning_rate_max,
+        'scheduler': 'OneCycleLR',
+    }
+    
+    logger.info("Testing full model...")
+    test_and_save_results(
+        model, test_dataloader, path, timestamp, 'all_layers',
+        shots_for_testing, num_classes, ris_option, all_layers_hyperparameters)
 
     model_path = Path(f'{path}/runs/{timestamp}_all_layers/model.pt')
-
-    model = cmc.train_model(model, criterion, optimizer, exp_lr_scheduler, 
-                            dataloaders, writer, dataset_sizes, num_epochs=num_epochs_for_all_layers,
-                            chkpt_path=model_path.with_name(f'{model_path.stem}_chkpt{model_path.suffix}'))
     
-    torch.save(model.state_dict(), model_path)
-
-    hyperparameters = {
-    'batch_size': batch_size,
-    'num_epochs': num_epochs_for_all_layers,
-    'optimizer': optimizer.__class__.__name__,
-    'criterion': criterion.__class__.__name__,
-    'learning_rate_max': learning_rate_max,
-    'scheduler': exp_lr_scheduler.__class__.__name__,
-    'shots_for_testing': torch.tensor(shots_for_testing.values.tolist()),
-    'shots_for_validation': torch.tensor(shots_for_validation.values.tolist()),
-    'shots_for_training': torch.tensor(shots_for_training.values.tolist()),
-    'ris_option': ris_option,
-    'num_classes': num_classes,
-    'second_image': 'None',
-    'augmentation': "applied" if augmentation else "no augmentation",
-    'random_seed': random_seed
-    }
-
-    #### Test the model############################################
-    metrics = cmc.test_model(f'runs/{timestamp}_all_layers', model, test_dataloader,
-                              comment='', writer=writer, signal_name='img', num_classes=num_classes)
+    logger.info("Phase 5/5: Training completed!")
+    logger.info("="*60)
+    logger.info(f"TRAINING COMPLETE - Model saved to: {model_path}")
+    logger.info("="*60)
     
-    metrics['prediction_df'].to_csv(f'{path}/runs/{timestamp}_all_layers/prediction_df.csv')
-
-    metrics_per_shot = cmc.per_shot_test(path=f'{path}/runs/{timestamp}_all_layers/', 
-                                shots=shots_for_testing.values.tolist(), results_df=metrics['prediction_df'],
-                                writer=writer, num_classes=num_classes,
-                                two_images=ris_option=='both')
-    
-    metrics_per_shot = pd.DataFrame(metrics_per_shot)
-    metrics_per_shot.to_csv(f'{path}/runs/{timestamp}_all_layers/metrics_per_shot.csv')
-
-    one_digit_metrics = {'Accuracy on test_dataset': metrics['accuracy'], 
-                        'F1 metric on test_dataset':metrics['f1'].tolist(), 
-                        'Precision on test_dataset':metrics['precision'].tolist(), 
-                        'Recall on test_dataset':metrics['recall'].tolist()}
-
-    writer.add_hparams(hyperparameters, one_digit_metrics)
-    writer.close()
-    
-    # Save hyperparameters and metrics to a JSON file
-    for key in ['shots_for_testing', 'shots_for_validation', 'shots_for_training']:
-        hyperparameters[key] = hyperparameters[key].tolist()  # Convert tensors to lists
-    all_hparams = {**hyperparameters, **one_digit_metrics}
-    # Convert to JSON
-    json_str = json.dumps(all_hparams, indent=4)
-    with open(f'{path}/runs/{timestamp}_all_layers/hparams.json', 'w') as f:
-        f.write(json_str)
-
     return model, model_path
 
 if __name__ == '__main__':
-    train_and_test_ris_model()
-    print('Done')
+    # Example usage with default parameters
+    #model, model_path = train_and_test_ris_model()
+    
+    # Example of using different configurations:
+    model, model_path = train_and_test_ris_model(
+        ris_option='RIS2',
+        pretrained_model=create_model_from_config('resnet18'),
+        num_workers=4,
+        num_epochs_for_fc=1,
+        num_epochs_for_all_layers=1,
+        batch_size=64,
+        learning_rate_min=1e-4,
+        learning_rate_max=1e-3,
+        weight_decay=1e-4,
+        comment_for_model_name=' test run',
+        random_seed=42,
+        augmentation=False,
+        test_df_contains_val_df=False,
+        test_run=True,
+        exponential_elm_decay=False,
+        grayscale=False,
+        data_frac=0.3
+    )
+    print(f'Training completed. Model saved to: {model_path}')

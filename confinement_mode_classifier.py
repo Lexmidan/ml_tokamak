@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 import numpy as np
 from PIL import Image
@@ -32,7 +33,6 @@ import time
 # torch.backends.cudnn.benchmark = False
 
 # device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-# print("Device:", device)
 
 
 
@@ -363,6 +363,12 @@ def train_model(model, criterion, optimizer, scheduler:lr_scheduler, dataloaders
                  return_best_model = False):
 
     since = time.time()
+    
+    # Get logger from parent module if it exists, otherwise create a simple one
+    logger = logging.getLogger('LHmode_classifier') if logging.getLogger('LHmode_classifier').handlers else logging.getLogger(__name__)
+    if not logger.handlers:
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
 
     best_acc = 0.0
 
@@ -370,8 +376,8 @@ def train_model(model, criterion, optimizer, scheduler:lr_scheduler, dataloaders
     total_batch = {'train': 0, 'val': 0}
 
     for epoch in range(num_epochs):
-        print(f'Epoch {epoch+1}/{num_epochs}')
-        print('-' * 10)
+        logger.info(f'Epoch {epoch+1}/{num_epochs}')
+        logger.info('-' * 10)
         
         # Each epoch has a training and validation phase
         for phase in ['train', 'val']:
@@ -405,14 +411,14 @@ def train_model(model, criterion, optimizer, scheduler:lr_scheduler, dataloaders
                     outputs = model(inputs) #2D tensor with shape Batchsize*len(modes)
                     
                     if torch.isnan(outputs).any():
-                        print(f'NaN values found in outputs in {phase} phase. Skipping this batch.')
+                        logger.warning(f'NaN values found in outputs in {phase} phase. Skipping this batch.')
                         continue
 
                     _, preds = torch.max(outputs, 1)
                     loss = criterion(outputs, labels.long() if len(labels.size())==1 else labels)
 
                     if torch.isnan(loss):
-                        print(f'Loss is NaN in {phase} phase. Skipping this batch.')
+                        logger.warning(f'Loss is NaN in {phase} phase. Skipping this batch.')
                         continue
 
                     # backward + optimize only if in training phase
@@ -466,7 +472,7 @@ def train_model(model, criterion, optimizer, scheduler:lr_scheduler, dataloaders
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = running_corrects.double() / dataset_sizes[phase]
 
-            print(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
+            logger.info(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
 
             if phase == 'val':
                 writer.add_scalar(f'accuracy', epoch_acc, epoch)
@@ -480,8 +486,8 @@ def train_model(model, criterion, optimizer, scheduler:lr_scheduler, dataloaders
         # load best model weights
     if return_best_model:
         model.load_state_dict(torch.load(chkpt_path))
-    print(f'Training complete in {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s')
-    print(f'Best val Acc: {best_acc:4f}')
+    logger.info(f'Training complete in {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s')
+    logger.info(f'Best val Acc: {best_acc:4f}')
     return model
 
 
@@ -544,7 +550,13 @@ def test_model(run_path,
             break
         
     if return_metrics:
-        print('Processing metrics...')
+        # Get logger from parent module if it exists, otherwise create a simple one
+        logger = logging.getLogger('LHmode_classifier') if logging.getLogger('LHmode_classifier').handlers else logging.getLogger(__name__)
+        if not logger.handlers:
+            logging.basicConfig(level=logging.INFO)
+            logger = logging.getLogger(__name__)
+            
+        logger.info('Processing metrics...')
         #Confusion matrix
         confusion_matrix_metric = MulticlassConfusionMatrix(num_classes=num_classes)
         confusion_matrix_metric.update(y_hat_df, y_df)
@@ -568,9 +580,9 @@ def test_model(run_path,
         textstr = '\n'.join((
             f'Whole test dset',
             r'threshhold = 0.5:',
-            r'f1=%.2f' % (f1.item(), ),
-            r'precision=%.2f' % (precision.item(), ),
-            r'recall=%.2f' % (recall.item(), ),
+            r'f1=%.2f' % (f1, ),
+            r'precision=%.2f' % (precision, ),
+            r'recall=%.2f' % (recall, ),
             r'accuracy=%.2f' % (accuracy, )))
         # these are matplotlib.patch.Patch properties
         props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
@@ -635,12 +647,22 @@ def per_shot_test(path, shots: list, results_df: pd.DataFrame,
         path: Path where images are saved
     '''
     metrics = {'shot':[], 'f1':[], 'precision':[], 'recall':[], 'kappa':[]}
+    
+    # Get logger from parent module if it exists, otherwise create a simple one
+    logger = logging.getLogger('LHmode_classifier') if logging.getLogger('LHmode_classifier').handlers else logging.getLogger(__name__)
+    if not logger.handlers:
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+    
     for shot in tqdm(shots):
         pred_for_shot = results_df[results_df['shot']==shot]
 
         if len(pred_for_shot)==0:
-            print(f'Shot {shot} not found in the results_df. Probably L-mode was removed from the dataset, and shot {shot} was L-mode only shot.')
+            logger.warning(f'Shot {shot} not found in the results_df. Probably L-mode was removed from the dataset, and shot {shot} was L-mode only shot.')
             continue
+
+        # Sort by time to ensure proper line plotting
+        pred_for_shot = pred_for_shot.sort_values('time').reset_index(drop=True)
 
         metrics['shot'].append(shot)
         preds_tensor = torch.tensor(pred_for_shot['prediction'].values.astype(float))
@@ -694,10 +716,10 @@ def per_shot_test(path, shots: list, results_df: pd.DataFrame,
             precision = (precision_ris1 + precision_ris2)/2
             recall = (recall_ris1 + recall_ris2)/2
 
-            metrics['f1'].append(f1.item())
-            metrics['precision'].append(precision.item())
-            metrics['recall'].append(recall.item())
-            metrics['kappa'].append(kappa.item())
+            metrics['f1'].append(f1)
+            metrics['precision'].append(precision)
+            metrics['recall'].append(recall)
+            metrics['kappa'].append(kappa)
 
             if num_classes==3:
                 conf_time_ax.plot(pred_for_shot_ris1['time'],-pred_for_shot_ris1['prob_2'], 
@@ -722,10 +744,10 @@ def per_shot_test(path, shots: list, results_df: pd.DataFrame,
             
             conf_time_ax.set_title(f'Shot {shot}, kappa = {kappa:.2f}, F1 = {f1:.2f}, Precision = {precision:.2f}, Recall = {recall:.2f}')
             
-            metrics['f1'].append(f1.item())
-            metrics['precision'].append(precision.item())
-            metrics['recall'].append(recall.item())
-            metrics['kappa'].append(kappa.item())
+            metrics['f1'].append(f1)
+            metrics['precision'].append(precision)
+            metrics['recall'].append(recall)
+            metrics['kappa'].append(kappa)
 
             if num_classes==3:
                 conf_time_ax.plot(pred_for_shot['time'],-pred_for_shot['prob_2'], label='2d class Confidence')
@@ -936,7 +958,7 @@ def calculate_auc(x, y):
     y_np = y.numpy()
 
     # Use numpy's trapezoidal rule integration
-    auc = np.trapz(y_np, x_np)
+    auc = np.trapezoid(y_np, x_np)
     return auc
 
 class AddRandomNoise(object):
