@@ -73,6 +73,198 @@ def setup_cv_logging(log_dir: Path, fold_idx: int = None) -> logging.Logger:
     return logger
 
 
+def create_dataloaders_for_both_cameras(path: Path, shots_for_training: pd.DataFrame, shots_for_testing: pd.DataFrame,
+                                       shots_for_validation: pd.DataFrame, num_classes: int,
+                                       exponential_elm_decay: bool, batch_size: int, num_workers: int,
+                                       augmentation: bool, grayscale: bool, test_run: bool = False) -> Tuple[Dict, Dict]:
+    """
+    Create dataloaders for 'both' cameras, properly handling camera availability per shot.
+    
+    Returns:
+        Tuple of (dataloaders dict, dataset_sizes dict, test_dataloader)
+    """
+    logger = logging.getLogger('cross_validation')
+    logger.info("Creating dataloaders for 'both' cameras with proper camera availability handling...")
+    
+    # Load shot usage to determine camera availability
+    shot_usage = pd.read_csv(f'{path}/data/shot_usageNEW.csv')
+    shot_usage_dict = shot_usage.set_index('shot')[['used_for_ris1', 'used_for_ris2']].to_dict('index')
+    
+    # Combine all shots
+    all_shots = pd.concat([shots_for_training, shots_for_testing, shots_for_validation]).unique()
+    
+    # Load and combine dataframes from available cameras for each shot
+    combined_shot_df = pd.DataFrame()
+    
+    for shot in all_shots:
+        if shot not in shot_usage_dict:
+            logger.warning(f"Shot {shot} not found in shot_usageNEW.csv, skipping...")
+            continue
+            
+        shot_info = shot_usage_dict[shot]
+        
+        # Load RIS1 data if available
+        if shot_info['used_for_ris1']:
+            try:
+                df_ris1 = pd.read_csv(f'{path}/data/LH_alpha/LH_alpha_shot_{shot}.csv')
+                df_ris1['shot'] = shot
+                df_ris1 = df_ris1.iloc[:-100]  # Drop last 100 rows
+                combined_shot_df = pd.concat([combined_shot_df, df_ris1], axis=0)
+            except FileNotFoundError:
+                logger.warning(f"RIS1 data file not found for shot {shot}")
+        
+        # Load RIS2 data if available
+        if shot_info['used_for_ris2']:
+            try:
+                df_ris2 = pd.read_csv(f'{path}/data/LH_alpha/LH_alpha_shot_{shot}.csv')
+                df_ris2['shot'] = shot
+                df_ris2 = df_ris2.iloc[:-100]  # Drop last 100 rows
+                # Convert RIS1 filenames to RIS2
+                df_ris2['filename'] = df_ris2['filename'].str.replace('RIS1', 'RIS2')
+                
+                # Filter out rows where RIS2 image doesn't exist
+                def image_exists(filename):
+                    return os.path.exists(os.path.join(path, filename))
+                
+                exists_mask = df_ris2['filename'].apply(image_exists)
+                df_ris2 = df_ris2[exists_mask]
+                
+                combined_shot_df = pd.concat([combined_shot_df, df_ris2], axis=0)
+            except FileNotFoundError:
+                logger.warning(f"RIS2 data file not found for shot {shot}")
+    
+    # Apply exponential ELM decay if needed
+    if exponential_elm_decay and num_classes == 3:
+        # Apply the same ELM decay logic as in confinement_mode_classifier
+        combined_shot_df['soft_label'] = combined_shot_df.apply(
+            lambda x: [0, 1, 0] if x['mode'] == 'H-mode' else [1, 0, 0], axis=1)
+        
+        # Pre and post peak time processing for ELMs
+        pre_time = 1
+        post_time = 2
+        
+        for shot in combined_shot_df['shot'].unique():
+            shot_data = combined_shot_df[combined_shot_df['shot'] == shot]
+            
+            if shot_data['mode'].str.contains('ELM-peak').any():
+                for elm_peak in shot_data[shot_data['mode'] == 'ELM-peak']['time']:
+                    # Pre-ELM probabilities
+                    pre_indices = shot_data.loc[shot_data['time'].between(elm_peak-pre_time, elm_peak)].index
+                    if not pre_indices.empty:
+                        pre_elm_prob = np.exp(-5 * np.linspace(pre_time, 0, len(pre_indices)))
+                        for i, prob in zip(pre_indices, pre_elm_prob):
+                            combined_shot_df.at[i, 'soft_label'] = [0, 1 - np.max([prob, combined_shot_df.at[i, 'soft_label'][2]]), 
+                                                        np.max([prob, combined_shot_df.at[i, 'soft_label'][2]])]
+                    
+                    # Post-ELM probabilities
+                    post_indices = shot_data.loc[shot_data['time'].between(elm_peak, elm_peak+post_time)].index
+                    if not post_indices.empty:
+                        post_elm_prob = np.exp(-3 * np.linspace(0, post_time, len(post_indices)))
+                        for i, prob in zip(post_indices, post_elm_prob):
+                            combined_shot_df.at[i, 'soft_label'] = [0, 1 - np.max([prob, combined_shot_df.at[i, 'soft_label'][2]]), 
+                                                        np.max([prob, combined_shot_df.at[i, 'soft_label'][2]])]
+
+    # Convert mode labels to numeric
+    df_mode = combined_shot_df['mode'].copy()
+    df_mode[combined_shot_df['mode']=='L-mode'] = 0
+    df_mode[combined_shot_df['mode']=='H-mode'] = 1
+    df_mode[combined_shot_df['mode']=='ELM'] = 2 if num_classes == 3 else 1
+    combined_shot_df['mode'] = df_mode
+    combined_shot_df = combined_shot_df.reset_index(drop=True)
+    
+    # Apply fast test mode sampling if enabled
+    if test_run:
+        logger.info("ULTRA-FAST MODE: Sampling only 100 images per shot for both cameras...")
+        def sample_shot_data(df, max_rows_per_shot=100):
+            if len(df) == 0:
+                return df
+            sampled_dfs = []
+            for shot in df['shot'].unique():
+                shot_data = df[df['shot'] == shot]
+                if len(shot_data) > max_rows_per_shot:
+                    shot_data = shot_data.sample(n=max_rows_per_shot, random_state=42)
+                sampled_dfs.append(shot_data)
+            return pd.concat(sampled_dfs, ignore_index=True)
+        
+        combined_shot_df = sample_shot_data(combined_shot_df, 100)
+        logger.info(f"ULTRA-FAST MODE: Reduced combined data to {len(combined_shot_df)} samples")
+    
+    # Split into train/val/test dataframes
+    test_df = combined_shot_df[combined_shot_df['shot'].isin(shots_for_testing)].reset_index(drop=True)
+    val_df = combined_shot_df[combined_shot_df['shot'].isin(shots_for_validation)].reset_index(drop=True)
+    train_df = combined_shot_df[combined_shot_df['shot'].isin(shots_for_training)].reset_index(drop=True)
+    
+    logger.info(f"Combined dataframes created - Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
+    
+    # Create dataloaders
+    test_dataloader = cmc.get_dloader(test_df, path, batch_size, balance_data=False, 
+                                      shuffle=False, num_workers=num_workers, 
+                                      augmentation=False, grayscale=grayscale)
+
+    val_dataloader = cmc.get_dloader(val_df, path, batch_size, balance_data=True, 
+                                     shuffle=False, num_workers=num_workers, 
+                                     augmentation=False, grayscale=grayscale)
+
+    train_dataloader = cmc.get_dloader(train_df, path, batch_size, balance_data=True, 
+                                       shuffle=False, num_workers=num_workers, 
+                                       augmentation=augmentation, grayscale=grayscale)
+
+    dataloaders = {'train': train_dataloader, 'val': val_dataloader}
+    dataset_sizes = {x: len(dataloaders[x].dataset) for x in ['train', 'val']}
+    
+    logger.info(f"Dataloaders created successfully - Train: {dataset_sizes['train']} samples, "
+                f"Val: {dataset_sizes['val']} samples, Test: {len(test_dataloader.dataset)} samples")
+    
+    return dataloaders, dataset_sizes, test_dataloader
+
+
+def load_shot_data_for_both_cameras(path: Path, test_df_contains_val_df: bool = True, 
+                                   test_run: bool = False, data_frac: float = 1.0, 
+                                   random_seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Load shot data for 'both' RIS option, considering camera availability for each shot.
+    
+    Args:
+        path: Path to the data directory
+        test_df_contains_val_df: Whether to include validation shots in test set
+        test_run: Whether to run with limited data for testing
+        data_frac: Fraction of training data to use
+        random_seed: Random seed for reproducibility
+        
+    Returns:
+        Tuple of (shots_for_testing, shots_for_validation, shots_for_training)
+    """
+    logger = logging.getLogger('cross_validation')
+    logger.info("Loading shot data for 'both' cameras option...")
+    
+    shot_usage = pd.read_csv(f'{path}/data/shot_usageNEW.csv')
+    
+    # Get shots that have either RIS1 or RIS2 data (or both)
+    shots_with_cameras = shot_usage[
+        (shot_usage['used_for_ris1'] == True) | (shot_usage['used_for_ris2'] == True)
+    ]
+    
+    shots_for_testing = shots_with_cameras[shots_with_cameras['used_as'] == 'test']['shot']
+    shots_for_validation = shots_with_cameras[shots_with_cameras['used_as'] == 'val']['shot']
+    shots_for_training = shots_with_cameras[shots_with_cameras['used_as'] == 'train']['shot']
+    
+    if test_df_contains_val_df:
+        shots_for_testing = pd.concat([shots_for_testing, shots_for_validation])
+    
+    if test_run:
+        shots_for_testing = shots_for_testing[:3]
+        shots_for_validation = shots_for_validation[:3]
+        shots_for_training = shots_for_training[:3]
+        logger.info("Running in test mode with limited data (3 shots each)")
+    
+    shots_for_training = shots_for_training.sample(frac=data_frac, random_state=random_seed)
+    
+    logger.info(f"Data split complete for 'both' cameras - Training: {len(shots_for_training)}, "
+                f"Validation: {len(shots_for_validation)}, Testing: {len(shots_for_testing)}")
+    
+    return shots_for_testing, shots_for_validation, shots_for_training
+
+
 def create_k_fold_splits(shots_df: pd.Series, k: int = 5, random_seed: int = 42) -> List[Tuple[pd.Series, pd.Series]]:
     """
     Create K-fold splits for cross validation.
@@ -131,15 +323,30 @@ def run_single_fold(fold_idx: int, train_shots: pd.Series, val_shots: pd.Series,
     # Create fold-specific timestamp that matches the directory structure
     fold_timestamp = f"{base_timestamp}/fold_{fold_idx + 1}"
     
+    # Clear GPU memory before creating dataloaders
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
     # Create dataloaders for this fold
-    dataloaders, dataset_sizes, test_dataloader = LH.create_dataloaders(
-        path, train_shots, test_shots, val_shots,
-        config['ris_option'], config['num_classes'], config['exponential_elm_decay'], 
-        config['batch_size'], config['num_workers'], config['augmentation'], config['grayscale'])
+    if config['ris_option'] == 'both':
+        dataloaders, dataset_sizes, test_dataloader = create_dataloaders_for_both_cameras(
+            path, train_shots, test_shots, val_shots,
+            config['num_classes'], config['exponential_elm_decay'], 
+            config['batch_size'], config['num_workers'], config['augmentation'], config['grayscale'], 
+            config.get('test_run', False))
+    else:
+        dataloaders, dataset_sizes, test_dataloader = LH.create_dataloaders(
+            path, train_shots, test_shots, val_shots,
+            config['ris_option'], config['num_classes'], config['exponential_elm_decay'], 
+            config['batch_size'], config['num_workers'], config['augmentation'], config['grayscale'])
 
     # Setup model
     pretrained_model = torchvision.models.resnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
     model = LH.setup_model(pretrained_model, config['num_classes'], device, config['grayscale'])
+
+    # Clear GPU memory before training
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     # Phase 1: Train only the fully connected layer
     logger.info(f"Fold {fold_idx + 1} - Phase 1: Training fully connected layer...")
@@ -409,21 +616,17 @@ def run_cross_validation_resnet34(config: Optional[Dict] = None) -> Optional[Dic
         # Apply monkey patch
         cmc.load_and_split_dataframes = fast_load_and_split_dataframes
     
-    # Load shot data
-    shots_for_testing, shots_for_validation, shots_for_training = LH.load_shot_data(
-        path, 'RIS1' if config['ris_option'] == 'both' else config['ris_option'], 
-        config['test_df_contains_val_df'], config['test_run'], 
-        config['data_frac'], config['random_seed'])
-    
-    # Handle 'both' option by combining RIS1 and RIS2 data
+    # Load shot data based on camera availability
     if config['ris_option'] == 'both':
-        shots_for_testing_ris2, shots_for_validation_ris2, shots_for_training_ris2 = LH.load_shot_data(
-            path, 'RIS2', config['test_df_contains_val_df'], config['test_run'], 
+        # For 'both' option, we need to get shots that have either RIS1 or RIS2 data
+        shots_for_testing, shots_for_validation, shots_for_training = load_shot_data_for_both_cameras(
+            path, config['test_df_contains_val_df'], config['test_run'], 
             config['data_frac'], config['random_seed'])
-        
-        shots_for_testing = pd.concat([shots_for_testing, shots_for_testing_ris2]).reset_index(drop=True)
-        shots_for_validation = pd.concat([shots_for_validation, shots_for_validation_ris2]).reset_index(drop=True)
-        shots_for_training = pd.concat([shots_for_training, shots_for_training_ris2]).reset_index(drop=True)
+    else:
+        # For single camera option, use the original function
+        shots_for_testing, shots_for_validation, shots_for_training = LH.load_shot_data(
+            path, config['ris_option'], config['test_df_contains_val_df'], config['test_run'], 
+            config['data_frac'], config['random_seed'])
 
     # Combine training and validation shots for cross-validation
     all_train_val_shots = pd.concat([shots_for_training, shots_for_validation]).reset_index(drop=True)
@@ -445,7 +648,8 @@ def run_cross_validation_resnet34(config: Optional[Dict] = None) -> Optional[Dic
             cv_results.append(fold_result)
             
             # Clear GPU memory after each fold
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
         except Exception as e:
             logger.error(f"Error in fold {fold_idx + 1}: {str(e)}")
@@ -481,14 +685,14 @@ if __name__ == '__main__':
     main_logger = logging.getLogger(__name__)
 
 
-    # Configuration for ultra-fast test run 
+    # Configuration for cross-validation run with conservative settings
     config = {
         'ris_option': 'both',
-        'num_workers': 4,
+        'num_workers': 0,  # Set to 0 to avoid multiprocessing issues in cross-validation
         'num_epochs_for_fc': 16,
         'num_epochs_for_all_layers': 16,
         'num_classes': 3,
-        'batch_size': 32,
+        'batch_size': 32,  # Reduced batch size to avoid memory issues
         'learning_rate_min': 0.001,
         'learning_rate_max': 0.01,
         'weight_decay': 1e-3,

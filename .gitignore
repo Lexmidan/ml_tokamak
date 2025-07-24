@@ -22,6 +22,7 @@ vyzkumny_ukol/routine copy.py
 vyzkumny_ukol/PhyDNet/runs
 PhyDNet/runs
 PhyDNet/data
+cross_validation_results
 
 *.pdf
 
