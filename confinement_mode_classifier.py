@@ -80,6 +80,7 @@ class ImageDataset(Dataset):
 
 
 class TwoImagesDataset(Dataset):
+    """DEPRECATED Dataset for two images, either RIS1 and RIS2 or two subsequential images from RIS1."""
     def __init__(self, annotations, img_dir, mean, std, second_img_opt: str = 'RIS2', augmentation = False):
         self.img_labels = annotations #pd.read_csv(annotations_file)
         self.img_dir = img_dir
@@ -127,6 +128,7 @@ class TwoImagesDataset(Dataset):
     
 class TwoImagesModel(nn.Module):
     """
+    DEPRECATED
     Initializes the TwoImagesModel composed of two pretrained resnet.
     Removes last fc layer and connects the logits with Sequential.
     Can be used for models trained RIS1 and RIS2 respectively, or for two subsequential images from RIS1

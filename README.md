@@ -1,72 +1,194 @@
-# Machine Learning on TOKAMAK data
+# COMPASS Tokamak Confinement Mode Classification
+
+A comprehensive machine learning framework for classifying plasma confinement modes (L-mode, H-mode, ELM) in the COMPASS Tokamak using various neural network architectures.
 
 ## Project Overview
 
-This Python Machine Learning project focuses on building, training, and evaluating models for classifying confinement modes of plasma in COMPASS Tokamak. The project is organized into multiple files and notebooks for various stages of the machine learning pipeline.
-Models are implemented in PyTorch. Access to the data used for training and testing is available through CDBClient (internal compass module).
+This project implements multiple deep learning approaches to classify plasma confinement modes in COMPASS Tokamak data:
 
-The core classifier architectures:
+### Model Architectures
 
-- **ResNet34** - Based on single image from RIS1/RIS2 fast camera indicates L/H/ELM confinement mode.
-- **PhyDNet**[6] - Physics informed model, originally purposed for forecasting is modified to a classifier. Receives $n$ subsequent images from RIS1 and predicts the confinement mode corresponding to the last image in the sequence.
-- **InceptionTime** - advanced LSTM used for time-series classification. Receives a small time-window of 1d signals (up to 4 signal sources can be chosen from 4 Mirnov Coils, Langmuire probe on divertor and $H_\alpha$) and predicts the confinement mode in arbitrary moment in the signal window.
-- **Simple1DCNN** - A rather simple convolutional network, that has the same task and data as InceptionTime, but learns faster, and apparently has better results.
+- **ResNet-based Models** (ResNet18/34/50) - Single image classification from RIS1/RIS2 fast cameras
+- **PhyDNet** - Physics-informed neural network for sequence-based classification
+- **InceptionTime** - Advanced time-series classifier for 1D signal data (Mirnov coils, Langmuir probes, H_α)
+- **Simple1DCNN** - Lightweight convolutional network for 1D signals
 
-## Project flow
+### Data Sources
 
-1. Prepare data using `imgs_processing.py` (resp.  `process_data_for_alt_models.py` for the 1d signal models)
-2. Train and test single-image ResNet model using `confinement_mode_classifier.py`, respectively you can train and test physics informed neural network PhyDNet (see [6]) in `PhyDNet_COMPASS.py`. For 1d signal models run `alt_models_training.py`
-3. Results of the training together with tensorboard events and hyperparameter will be stored in `./runs` folder.
-4. Run `results_visualization.ipynb` for interactive results visualization.
+- **RIS1/RIS2 Fast Cameras**: High-speed visible light imaging
+- **Mirnov Coils**: Magnetic fluctuation measurements  
+- **Langmuir Probes**: Plasma edge diagnostics
+- **H_α Spectroscopy**: Hydrogen emission monitoring
 
+## Quick Start
 
-## Files and Notebooks
+### Prerequisites
 
-Here is an overview of the project's directory structure and the purpose of each file:
+```bash
+pip install -r requirements.txt
+```
 
-0. `vyzkumny_ukol`: This is a folder that contains all the relevant files.
+**Note**: This project requires access to COMPASS Tokamak data through CDBClient (internal module).
 
-1. `imgs_processing.py`: This Python script generates datasets used for training and testing. Running this script requires CDBClient to be installed. All the data preprocess is contained in this script.
+### Basic Usage
 
-2. `LHmode_classifier.py`: a single camera (RIS1, RIS2 or both) model classifying between L-mode H-mode and ELM is trained and saved. Model's architecrute is ResNet18.
+#### 1. **Image-based Classification (ResNet)**
+```python
+from confinement_mode_classifier import train_and_test_ris_model
 
-3. `ModelEnsembling.py`: in this script you will find code related to model ensembling. It combines two trained models created in `LHmode_classifier.ipynb`, to improve classification performance. Improvement is not significant, hence the script is abandoned
+# Train on RIS1 camera data
+model, model_path = train_and_test_ris_model(
+    ris_option='RIS1',
+    num_epochs_for_fc=10,
+    num_epochs_for_all_layers=20
+)
+```
 
-4. `test_model.ipynb`: testing of the trained models is conducted. It generates metric scores to evaluate performance in classifying confinement modes.
+#### 2. **Physics-informed Sequence Classification (PhyDNet)**
+```python
+# Train PhyDNet model
+python PhyDNet_COMPASS.py --num_epochs 50 --batch_size 16
+```
 
-5. `TB_clustering.ipynb`: contains code related to exploratory data analysis for the project. It simply generates embeddings for the Tensorboard in order to study t-SNE, PCA and UMAP.
+#### 3. **1D Signal Classification**
+```python
+from alt_models_training import main
 
-6. `alt_models.py`: this module contains the utility functions and classes for supplementary models e.g. InecptionTime and 1D-CNN, that operates on 1d signals from Mirnov Coils, Langmuir probes and $H_\alpha$
+# Train InceptionTime or Simple1DCNN
+main()
+```
 
-7. `confinement_mode_classifier.py`: in this file all the necessary functions and classes used in training and testing of RIS camera models are stored.
+## Project Structure
 
-8. `Cross_validation.py`: a script that cross-validates the RIS and supplementary models using K-fold technique.
+### Core Training Scripts
+- `LHmode_classifier.py` - ResNet-based image classifiers
+- `alt_models_training.py` - 1D signal classification models
+- `PhyDNet_COMPASS.py` - Physics-informed sequence models  
+- `confinement_mode_classifier.py` - utilities for ResNet and 1D signal models
+- `cross_validation_resnet34.py` - Cross-validation script
+- `ModelEnsembling.py` - NN ensemble of two ResNet receiving either two images from different cameras or different times. **Deprecated** (single model is enough)
 
-9. `alt_models_training.py`: training and testing routine of supplementary models.
+### Data Processing
+- `imgs_processing.py` - Image dataset preparation and preprocessing
+- `process_data_for_alt_models.py` - 1D signal data preparation
 
-10. `PhyDNet_COMPASS.py`: training and testing routine of PhyDNet model with "cold start" initialization.
+### Model Definitions
+- `alt_models.py` - InceptionTime and Simple1DCNN implementations
+- `PhyDNet_models.py` - PhyDNet architecture components
 
-11. `PhyDNet_finetuning.py`: finetuning and testing of pretrained in `PhyDNet_COMPASS.py` PhyDNet model.
+### Analysis & Visualization
+- `results_visualization.ipynb` - Interactive results exploration
+- `visual.py` - Visualization utilities
+- `notebooks/` - Jupyter notebooks for analysis and testing
 
-12. `PhyDNet_models.py`: module containing the modified for the task PhyDNet model.
+## 🔄 Complete Workflow
 
-13. `process_data_for_alt_models.py`: a script that prepares data for training supplementary models.
+### Step 1: Data Preparation
+```bash
+# For image-based models
+python imgs_processing.py
 
-14. `results_visualization.ipynb`: a notebook that invokes `visualize` function from `visual` module, that uses `ipywidgets` package to make an interactive visualization of models' results.
+# For 1D signal models  
+python process_data_for_alt_models.py
+```
 
+### Step 2: Model Training
 
-## Theory
+**Single Image Classification:**
+```python
+from confinement_mode_classifier import train_and_test_ris_model
 
-[1] I. Goodfellow, Y. Bengio, and A. Courville: Deep Learning. The MIT Press, 2016.
+# Basic training
+model, path = train_and_test_ris_model(ris_option='RIS1')
 
-[2] M. Zorek, et al.: Semi-supervised deep networks for plasma state identification. Plasma Phys. Control. Fusion 64 (2022) 125004.
+# Custom configuration
+model, path = train_and_test_ris_model(
+    ris_option='both',  # Use images from both cameras
+    model_name='resnet34',
+    batch_size=32,
+    grayscale=True
+)
+```
+
+**Sequence-based Classification:**
+```python
+# PhyDNet training
+python PhyDNet_COMPASS.py --sequence_length 10 --batch_size 8
+```
+
+**1D Signal Classification:**
+```python
+# Configure in alt_models_training.py, then run:
+python alt_models_training.py
+```
+
+### Step 3: Results Analysis
+```python
+# Launch interactive visualization
+jupyter notebook results_visualization.ipynb
+```
+
+## Model Performance & Cross-Validation
+
+Run k-fold cross-validation:
+```python
+from cross_validation_resnet34 import run_cross_validation
+
+results = run_cross_validation(
+    model_name='resnet34',
+    ris_option='RIS1', 
+    n_splits=5
+)
+```
+
+View training progress:
+```bash
+tensorboard --logdir=./runs
+```
+
+## Advanced Usage
+
+### Custom Model Architecture
+```python
+from confinement_mode_classifier import create_model_from_config
+
+# Create custom ResNet variant
+model = create_model_from_config('resnet50')
+trained_model, path = train_and_test_ris_model(pretrained_model=model)
+```
+
+### Hyperparameter Tuning
+See `refactored_examples.py` for detailed examples of:
+- Custom training configurations
+- Model ensemble methods
+- Manual training pipeline control
+
+## Output Structure
+
+Training results are saved in `./runs/` with timestamps:
+```
+runs/
+├── YYYY-MM-DD_HH-MM-SS_ModelName_RISOption/
+│   ├── model.pth                 # Trained model weights
+│   ├── hyperparameters.json      # Training configuration  
+│   ├── metrics.json              # Performance metrics
+│   ├── predictions.csv           # Test set predictions
+│   └── tensorboard_logs/         # TensorBoard event files
+```
+
+## Physics Background
+
+This project addresses plasma confinement mode classification in COMPASS tokamak, specifically targeting:
+
+- **L-mode**: Low confinement mode with continuous turbulent transport
+- **H-mode**: High confinement mode with improved particle/energy confinement  
+- **ELM**: Edge Localized Modes - periodic instabilities in H-mode. Different types of ELMs are not considered. Neither is Dithering.
+
+## Citation & References
+
+[1] M. Zorek, et al.: Semi-supervised deep networks for plasma state identification. Plasma Phys. Control. Fusion 64 (2022) 125004.
+
+[2] V. Le Guen, et al.: Disentangling Physical Dynamics from Unknown Factors for Unsupervised Video Prediction. CVPR (2020).
 
 [3] V. Weinzettl, et al.: Progress in diagnostics of the COMPASS tokamak. JINST 12 (2017) C12015.
-
-[4] U. Losada, et al.: Observations with fast visible cameras in high power Deuterium plasma experiments in the JET ITER-like wall tokamak. Nuclear Mat. and Energy 25 (2020) 100837
-
-[5] H. Zohm: Edge localized modes (ELMs). Plasma Phys. Control. Fusion 38 105  (1996)
-
-[6] V. Le Guen, et al.: Disentangling Physical Dynamics from Unknown Factors for Unsupervised Video Prediction. Computer Vision and Pattern Recognition (CVPR) (2020).
-
 
