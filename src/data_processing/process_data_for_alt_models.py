@@ -10,7 +10,7 @@ import xrscipy.signal as dsp
 import numpy as np
 from tqdm import tqdm
 
-import imgs_processing as imgs
+from . import imgs_processing as imgs
 
 cdb = client.CDBClient()
 

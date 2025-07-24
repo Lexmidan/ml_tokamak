@@ -1,6 +1,6 @@
-import LHmode_classifier as LH
-import alt_models_training as amtr
-import Cross_validation as cval
+from src.training import LHmode_classifier as LH
+from src.training import alt_models_training as amtr
+# import Cross_validation as cval  # This import seems to be missing/incorrect
 
 import torch
 import torchvision

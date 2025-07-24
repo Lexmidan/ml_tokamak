@@ -10,7 +10,7 @@ import torch
 import torchvision
 from torchvision.models.resnet import ResNet34_Weights, ResNet50_Weights
 
-from LHmode_classifier import (
+from src.training.LHmode_classifier import (
     train_and_test_ris_model,
     create_model_from_config,
     load_shot_data,

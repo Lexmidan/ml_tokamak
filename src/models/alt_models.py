@@ -20,7 +20,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-import confinement_mode_classifier as cmc
+from ..utils import confinement_mode_classifier as cmc
 
 ####### Stolen from https://github.com/TheMrGhostman/InceptionTime-Pytorch/###########
 def correct_sizes(sizes):

@@ -19,7 +19,7 @@ import pandas as pd
 import pytorch_lightning as pl
 from torchvision.models.resnet import ResNet50_Weights, ResNet34_Weights, ResNet101_Weights, ResNet152_Weights, ResNet18_Weights
 
-import confinement_mode_classifier as cmc
+from ..utils import confinement_mode_classifier as cmc
 
 
 def setup_logging(log_dir: Path, phase: str = None) -> logging.Logger:

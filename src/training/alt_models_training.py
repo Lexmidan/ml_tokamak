@@ -12,8 +12,8 @@ from torch.utils.tensorboard import SummaryWriter
 import pandas as pd
 import pytorch_lightning as pl
 
-import alt_models as am
-import confinement_mode_classifier as cmc
+from ..models import alt_models as am
+from ..utils import confinement_mode_classifier as cmc
 
 
 

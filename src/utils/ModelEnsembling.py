@@ -16,7 +16,7 @@ from torch.utils.tensorboard import SummaryWriter
 import pandas as pd
 import pytorch_lightning as pl
 
-import confinement_mode_classifier as cmc
+from . import confinement_mode_classifier as cmc
 
 def train_and_test_ensembled_model(ris_option = 'RIS1',
                                     second_img_opt = 'RIS2',

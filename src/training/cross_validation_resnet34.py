@@ -22,8 +22,8 @@ from torchvision.models.resnet import ResNet50_Weights, ResNet34_Weights, ResNet
 from sklearn.model_selection import KFold
 import numpy as np
 
-import LHmode_classifier as LH
-import confinement_mode_classifier as cmc
+from . import LHmode_classifier as LH
+from ..utils import confinement_mode_classifier as cmc
 
 
 def setup_cv_logging(log_dir: Path, fold_idx: int = None) -> logging.Logger:

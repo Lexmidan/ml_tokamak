@@ -16,7 +16,7 @@ import copy
 
 import time
 from torchmetrics.classification import MulticlassConfusionMatrix, F1Score, MulticlassPrecision, MulticlassRecall
-from PhyDNet_models import ConvLSTM, PhyCell, ClassifierRNN
+from ..models.PhyDNet_models import ConvLSTM, PhyCell, ClassifierRNN
 from sklearn.metrics import cohen_kappa_score, precision_score, recall_score, f1_score
 from PhyDNet.constrain_moments import K2M
 import torch.multiprocessing as mp
@@ -30,11 +30,11 @@ import pandas as pd
 from torchvision.io import read_image
 from datetime import datetime
 from pathlib import Path
-import confinement_mode_classifier as cmc
+from ..utils import confinement_mode_classifier as cmc
 from torch.utils.tensorboard import SummaryWriter
 
 
-import PhyDNet_COMPASS as pdnt
+from . import PhyDNet_COMPASS as pdnt
 
 
 
