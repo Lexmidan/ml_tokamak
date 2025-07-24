@@ -688,7 +688,7 @@ if __name__ == '__main__':
     # Configuration for cross-validation run with conservative settings
     config = {
         'ris_option': 'both',
-        'num_workers': 0,  # Set to 0 to avoid multiprocessing issues in cross-validation
+        'num_workers': 4,  # Set to 0 to avoid multiprocessing issues in cross-validation
         'num_epochs_for_fc': 16,
         'num_epochs_for_all_layers': 16,
         'num_classes': 3,

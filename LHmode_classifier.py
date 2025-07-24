@@ -616,7 +616,7 @@ if __name__ == '__main__':
     
     # Example of using different configurations:
     model, model_path = train_and_test_ris_model(
-        ris_option='RIS2',
+        ris_option='RIS1',
         pretrained_model=create_model_from_config('resnet18'),
         num_workers=4,
         num_epochs_for_fc=1,
@@ -625,13 +625,13 @@ if __name__ == '__main__':
         learning_rate_min=1e-4,
         learning_rate_max=1e-3,
         weight_decay=1e-4,
-        comment_for_model_name=' test run',
+        comment_for_model_name=' resnet18, 3 output classes',
         random_seed=42,
         augmentation=False,
-        test_df_contains_val_df=False,
-        test_run=True,
+        test_df_contains_val_df=True,
+        test_run=False,
         exponential_elm_decay=False,
         grayscale=False,
-        data_frac=0.3
+        data_frac=1
     )
     print(f'Training completed. Model saved to: {model_path}')
