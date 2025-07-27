@@ -1,16 +1,13 @@
 # COMPASS Tokamak Confinement Mode Classification
 
-A comprehensive machine learning framework for classifying plasma confinement modes (L-mode, H-mode, ELM) in the COMPASS Tokamak using various neural network architectures.
+Machine learning framework for classifying plasma confinement modes (L-mode, H-mode, ELM) in the COMPASS Tokamak using various neural network architectures and data sources.
 
-## Project Overview
-
-This project implements multiple deep learning approaches to classify plasma confinement modes in COMPASS Tokamak data:
 
 ### Model Architectures
 
 - **ResNet-based Models** (ResNet18/34/50) - Single image classification from RIS1/RIS2 fast cameras
-- **PhyDNet** - Physics-informed neural network for sequence-based classification
-- **InceptionTime** - Advanced time-series classifier for 1D signal data (Mirnov coils, Langmuir probes, H_α)
+- **PhyDNet** - Physics-informed neural network for sequence-based classification [2]
+- **InceptionTime** - Advanced time-series classifier for 1D signal data (Mirnov coils, Langmuir probes, H_α) [1]
 - **Simple1DCNN** - Lightweight convolutional network for 1D signals
 
 ### Data Sources

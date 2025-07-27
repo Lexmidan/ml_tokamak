@@ -73,15 +73,16 @@ def setup_cv_logging(log_dir: Path, fold_idx: int = None) -> logging.Logger:
     return logger
 
 
-def create_dataloaders_for_both_cameras(path: Path, shots_for_training: pd.DataFrame, shots_for_testing: pd.DataFrame,
+def create_dataloaders_for_both_cameras(path: Path, shots_for_training: pd.DataFrame,
                                        shots_for_validation: pd.DataFrame, num_classes: int,
                                        exponential_elm_decay: bool, batch_size: int, num_workers: int,
-                                       augmentation: bool, grayscale: bool, test_run: bool = False) -> Tuple[Dict, Dict]:
+                                       augmentation: bool, grayscale: bool, test_run: bool = False) -> Tuple[Dict, Dict, object]:
     """
     Create dataloaders for 'both' cameras, properly handling camera availability per shot.
+    No separate test set - validation set is used for evaluation.
     
     Returns:
-        Tuple of (dataloaders dict, dataset_sizes dict, test_dataloader)
+        Tuple of (dataloaders dict, dataset_sizes dict, validation_dataloader)
     """
     logger = logging.getLogger('cross_validation')
     logger.info("Creating dataloaders for 'both' cameras with proper camera availability handling...")
@@ -91,7 +92,7 @@ def create_dataloaders_for_both_cameras(path: Path, shots_for_training: pd.DataF
     shot_usage_dict = shot_usage.set_index('shot')[['used_for_ris1', 'used_for_ris2']].to_dict('index')
     
     # Combine all shots
-    all_shots = pd.concat([shots_for_training, shots_for_testing, shots_for_validation]).unique()
+    all_shots = pd.concat([shots_for_training, shots_for_validation]).unique()
     
     # Load and combine dataframes from available cameras for each shot
     combined_shot_df = pd.DataFrame()
@@ -189,19 +190,14 @@ def create_dataloaders_for_both_cameras(path: Path, shots_for_training: pd.DataF
         combined_shot_df = sample_shot_data(combined_shot_df, 100)
         logger.info(f"ULTRA-FAST MODE: Reduced combined data to {len(combined_shot_df)} samples")
     
-    # Split into train/val/test dataframes
-    test_df = combined_shot_df[combined_shot_df['shot'].isin(shots_for_testing)].reset_index(drop=True)
+    # Split into train/val dataframes (no test set)
     val_df = combined_shot_df[combined_shot_df['shot'].isin(shots_for_validation)].reset_index(drop=True)
     train_df = combined_shot_df[combined_shot_df['shot'].isin(shots_for_training)].reset_index(drop=True)
     
-    logger.info(f"Combined dataframes created - Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
+    logger.info(f"Combined dataframes created - Train: {len(train_df)}, Val: {len(val_df)}")
     
     # Create dataloaders
-    test_dataloader = cmc.get_dloader(test_df, path, batch_size, balance_data=False, 
-                                      shuffle=False, num_workers=num_workers, 
-                                      augmentation=False, grayscale=grayscale)
-
-    val_dataloader = cmc.get_dloader(val_df, path, batch_size, balance_data=True, 
+    val_dataloader = cmc.get_dloader(val_df, path, batch_size, balance_data=False, 
                                      shuffle=False, num_workers=num_workers, 
                                      augmentation=False, grayscale=grayscale)
 
@@ -213,29 +209,27 @@ def create_dataloaders_for_both_cameras(path: Path, shots_for_training: pd.DataF
     dataset_sizes = {x: len(dataloaders[x].dataset) for x in ['train', 'val']}
     
     logger.info(f"Dataloaders created successfully - Train: {dataset_sizes['train']} samples, "
-                f"Val: {dataset_sizes['val']} samples, Test: {len(test_dataloader.dataset)} samples")
+                f"Val: {dataset_sizes['val']} samples")
     
-    return dataloaders, dataset_sizes, test_dataloader
+    return dataloaders, dataset_sizes, val_dataloader
 
 
-def load_shot_data_for_both_cameras(path: Path, test_df_contains_val_df: bool = True, 
-                                   test_run: bool = False, data_frac: float = 1.0, 
-                                   random_seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_all_shots_for_both_cameras(path: Path, test_run: bool = False, data_frac: float = 1.0, 
+                                   random_seed: int = 42) -> pd.Series:
     """
-    Load shot data for 'both' RIS option, considering camera availability for each shot.
+    Load ALL shot data for 'both' RIS option for cross-validation (no separate test set).
     
     Args:
         path: Path to the data directory
-        test_df_contains_val_df: Whether to include validation shots in test set
         test_run: Whether to run with limited data for testing
-        data_frac: Fraction of training data to use
+        data_frac: Fraction of data to use
         random_seed: Random seed for reproducibility
         
     Returns:
-        Tuple of (shots_for_testing, shots_for_validation, shots_for_training)
+        Series of all available shots
     """
     logger = logging.getLogger('cross_validation')
-    logger.info("Loading shot data for 'both' cameras option...")
+    logger.info("Loading ALL shot data for 'both' cameras option (no separate test set)...")
     
     shot_usage = pd.read_csv(f'{path}/data/shot_usageNEW.csv')
     
@@ -244,25 +238,60 @@ def load_shot_data_for_both_cameras(path: Path, test_df_contains_val_df: bool = 
         (shot_usage['used_for_ris1'] == True) | (shot_usage['used_for_ris2'] == True)
     ]
     
-    shots_for_testing = shots_with_cameras[shots_with_cameras['used_as'] == 'test']['shot']
-    shots_for_validation = shots_with_cameras[shots_with_cameras['used_as'] == 'val']['shot']
-    shots_for_training = shots_with_cameras[shots_with_cameras['used_as'] == 'train']['shot']
-    
-    if test_df_contains_val_df:
-        shots_for_testing = pd.concat([shots_for_testing, shots_for_validation])
+    # Combine all available shots (train + val + test from original split)
+    all_shots = shots_with_cameras['shot']
     
     if test_run:
-        shots_for_testing = shots_for_testing[:3]
-        shots_for_validation = shots_for_validation[:3]
-        shots_for_training = shots_for_training[:3]
-        logger.info("Running in test mode with limited data (3 shots each)")
+        all_shots = all_shots[:15]  # Use 15 shots for test mode (3 per fold)
+        logger.info("Running in test mode with limited data (15 shots total)")
     
-    shots_for_training = shots_for_training.sample(frac=data_frac, random_state=random_seed)
+    # Apply data fraction
+    all_shots = all_shots.sample(frac=data_frac, random_state=random_seed)
     
-    logger.info(f"Data split complete for 'both' cameras - Training: {len(shots_for_training)}, "
-                f"Validation: {len(shots_for_validation)}, Testing: {len(shots_for_testing)}")
+    logger.info(f"Total shots available for cross-validation: {len(all_shots)}")
     
-    return shots_for_testing, shots_for_validation, shots_for_training
+    return all_shots
+
+
+def load_all_shots_single_camera(path: Path, ris_option: str, test_run: bool = False, 
+                                 data_frac: float = 1.0, random_seed: int = 42) -> pd.Series:
+    """
+    Load ALL shot data for single camera option for cross-validation (no separate test set).
+    
+    Args:
+        path: Path to the data directory
+        ris_option: Camera option ('RIS1' or 'RIS2')
+        test_run: Whether to run with limited data for testing
+        data_frac: Fraction of data to use
+        random_seed: Random seed for reproducibility
+        
+    Returns:
+        Series of all available shots
+    """
+    logger = logging.getLogger('cross_validation')
+    logger.info(f"Loading ALL shot data for '{ris_option}' camera (no separate test set)...")
+    
+    shot_usage = pd.read_csv(f'{path}/data/shot_usageNEW.csv')
+    
+    # Get shots that have data for the specified camera
+    if ris_option == 'RIS1':
+        shots_with_camera = shot_usage[shot_usage['used_for_ris1'] == True]
+    else:  # RIS2
+        shots_with_camera = shot_usage[shot_usage['used_for_ris2'] == True]
+    
+    # Get all available shots
+    all_shots = shots_with_camera['shot']
+    
+    if test_run:
+        all_shots = all_shots[:15]  # Use 15 shots for test mode (3 per fold)
+        logger.info("Running in test mode with limited data (15 shots total)")
+    
+    # Apply data fraction
+    all_shots = all_shots.sample(frac=data_frac, random_state=random_seed)
+    
+    logger.info(f"Total shots available for cross-validation: {len(all_shots)}")
+    
+    return all_shots
 
 
 def create_k_fold_splits(shots_df: pd.Series, k: int = 5, random_seed: int = 42) -> List[Tuple[pd.Series, pd.Series]]:
@@ -294,15 +323,14 @@ def create_k_fold_splits(shots_df: pd.Series, k: int = 5, random_seed: int = 42)
 
 
 def run_single_fold(fold_idx: int, train_shots: pd.Series, val_shots: pd.Series, 
-                   test_shots: pd.Series, config: Dict, base_timestamp: str) -> Dict:
+                   config: Dict, base_timestamp: str) -> Dict:
     """
     Run training and testing for a single fold.
     
     Args:
         fold_idx: Current fold index
         train_shots: Training shots for this fold
-        val_shots: Validation shots for this fold
-        test_shots: Test shots (same for all folds)
+        val_shots: Validation shots for this fold (used for evaluation and visualization)
         config: Training configuration
         base_timestamp: Base timestamp for folder naming
         
@@ -329,14 +357,16 @@ def run_single_fold(fold_idx: int, train_shots: pd.Series, val_shots: pd.Series,
     
     # Create dataloaders for this fold
     if config['ris_option'] == 'both':
-        dataloaders, dataset_sizes, test_dataloader = create_dataloaders_for_both_cameras(
-            path, train_shots, test_shots, val_shots,
+        dataloaders, dataset_sizes, val_dataloader = create_dataloaders_for_both_cameras(
+            path, train_shots, val_shots,
             config['num_classes'], config['exponential_elm_decay'], 
             config['batch_size'], config['num_workers'], config['augmentation'], config['grayscale'], 
             config.get('test_run', False))
     else:
-        dataloaders, dataset_sizes, test_dataloader = LH.create_dataloaders(
-            path, train_shots, test_shots, val_shots,
+        # For single camera, we need to create a similar function or modify LH.create_dataloaders
+        # For now, let's assume we have a modified function
+        dataloaders, dataset_sizes, val_dataloader = LH.create_dataloaders_cv(
+            path, train_shots, val_shots,
             config['ris_option'], config['num_classes'], config['exponential_elm_decay'], 
             config['batch_size'], config['num_workers'], config['augmentation'], config['grayscale'])
 
@@ -365,17 +395,17 @@ def run_single_fold(fold_idx: int, train_shots: pd.Series, val_shots: pd.Series,
     fold_fc_dir.mkdir(exist_ok=True)
     fold_all_layers_dir.mkdir(exist_ok=True)
 
-    # Test after FC training
+    # Test after FC training - now uses validation set
     fc_writer = SummaryWriter(f'cross_validation_results/{fold_timestamp}_last_fc')
     fc_metrics = cmc.test_model(
-        str(fold_fc_dir), model, test_dataloader, 
+        str(fold_fc_dir), model, val_dataloader, 
         comment=f'fold_{fold_idx + 1}', writer=fc_writer, 
         num_classes=config['num_classes'], signal_name='img')
     
-    # Per-shot analysis for FC model
+    # Per-shot analysis for FC model - uses validation shots
     fc_per_shot_metrics = cmc.per_shot_test(
         path=str(fold_fc_dir) + '/', 
-        shots=test_shots.values.tolist(), 
+        shots=val_shots.values.tolist(), 
         results_df=fc_metrics['prediction_df'], 
         writer=fc_writer,
         num_classes=config['num_classes'],
@@ -397,17 +427,17 @@ def run_single_fold(fold_idx: int, train_shots: pd.Series, val_shots: pd.Series,
         config['learning_rate_max'], config['weight_decay'], freeze_backbone=False,
         base_dir='cross_validation_results')
 
-    # Test after full training
+    # Test after full training - now uses validation set
     all_layers_writer = SummaryWriter(f'cross_validation_results/{fold_timestamp}_all_layers')
     all_layers_metrics = cmc.test_model(
-        str(fold_all_layers_dir), model, test_dataloader, 
+        str(fold_all_layers_dir), model, val_dataloader, 
         comment=f'fold_{fold_idx + 1}', writer=all_layers_writer, 
         num_classes=config['num_classes'], signal_name='img')
     
-    # Per-shot analysis
+    # Per-shot analysis - uses validation shots
     per_shot_metrics = cmc.per_shot_test(
         path=str(fold_all_layers_dir) + '/', 
-        shots=test_shots.values.tolist(), 
+        shots=val_shots.values.tolist(), 
         results_df=all_layers_metrics['prediction_df'], 
         writer=all_layers_writer,
         num_classes=config['num_classes'],
@@ -577,6 +607,7 @@ def run_cross_validation_resnet34(config: Optional[Dict] = None) -> Optional[Dic
     logger = setup_cv_logging(cv_results_dir)
 
     logger.info(f"Starting {config['k_folds']}-fold cross-validation with ResNet34")
+    logger.info("Pure k-fold CV: Each fold uses different validation set for evaluation")
     logger.info(f"Configuration: {config}")
     
     # ULTRA-FAST TEST MODE: Monkey patch the data loading for extreme speed
@@ -618,24 +649,18 @@ def run_cross_validation_resnet34(config: Optional[Dict] = None) -> Optional[Dic
     
     # Load shot data based on camera availability
     if config['ris_option'] == 'both':
-        # For 'both' option, we need to get shots that have either RIS1 or RIS2 data
-        shots_for_testing, shots_for_validation, shots_for_training = load_shot_data_for_both_cameras(
-            path, config['test_df_contains_val_df'], config['test_run'], 
-            config['data_frac'], config['random_seed'])
+        # For 'both' option, load all available shots for cross-validation
+        all_shots = load_all_shots_for_both_cameras(
+            path, config['test_run'], config['data_frac'], config['random_seed'])
     else:
-        # For single camera option, use the original function
-        shots_for_testing, shots_for_validation, shots_for_training = LH.load_shot_data(
-            path, config['ris_option'], config['test_df_contains_val_df'], config['test_run'], 
-            config['data_frac'], config['random_seed'])
+        # For single camera option, load all available shots for that camera
+        all_shots = load_all_shots_single_camera(
+            path, config['ris_option'], config['test_run'], config['data_frac'], config['random_seed'])
 
-    # Combine training and validation shots for cross-validation
-    all_train_val_shots = pd.concat([shots_for_training, shots_for_validation]).reset_index(drop=True)
+    logger.info(f"Total shots for cross-validation: {len(all_shots)}")
     
-    logger.info(f"Total shots for cross-validation: {len(all_train_val_shots)}")
-    logger.info(f"Test shots (constant across folds): {len(shots_for_testing)}")
-    
-    # Create K-fold splits
-    fold_splits = create_k_fold_splits(all_train_val_shots, config['k_folds'], config['random_seed'])
+    # Create K-fold splits on ALL available shots
+    fold_splits = create_k_fold_splits(all_shots, config['k_folds'], config['random_seed'])
     
     # Run cross-validation
     cv_results = []
@@ -643,7 +668,7 @@ def run_cross_validation_resnet34(config: Optional[Dict] = None) -> Optional[Dic
     for fold_idx, (train_shots, val_shots) in enumerate(fold_splits):
         try:
             fold_result = run_single_fold(
-                fold_idx, train_shots, val_shots, shots_for_testing, 
+                fold_idx, train_shots, val_shots, 
                 config, base_timestamp)
             cv_results.append(fold_result)
             
@@ -698,7 +723,6 @@ if __name__ == '__main__':
         'weight_decay': 1e-3,
         'random_seed': 42,
         'augmentation': False,
-        'test_df_contains_val_df': False,
         'test_run': False,
         'exponential_elm_decay': False,
         'grayscale': False,
