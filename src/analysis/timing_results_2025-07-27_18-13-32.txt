@@ -1,0 +1,227 @@
+
+============================================================
+TESTING RESNET18 (1/2)
+============================================================
+
+Testing resnet18 with RGB images:
+Using device: cuda:0 (NVIDIA GeForce RTX 4090)
+Loading resnet18 model (RGB)...
+Model parameters: 11,178,051 total, 1,539 trainable
+Collecting 1000 random image paths...
+Found 1000 images
+
+Testing batch size: 1
+Warming up...
+Starting timing...
+  Processed 1000 images in 4.4852 seconds (batch test took 95.7s)
+  Mean time per image: 4.49 ± 2.74 ms
+  Throughput: 223.0 FPS
+
+Testing batch size: 8
+Warming up...
+Starting timing...
+  Processed 1000 images in 0.7535 seconds (batch test took 31.3s)
+  Mean time per image: 0.75 ± 0.20 ms
+  Throughput: 1327.1 FPS
+
+Testing batch size: 16
+Warming up...
+Starting timing...
+  Processed 1000 images in 0.8700 seconds (batch test took 36.2s)
+  Mean time per image: 0.87 ± 0.29 ms
+  Throughput: 1149.5 FPS
+
+Testing batch size: 32
+Warming up...
+Starting timing...
+  Processed 1000 images in 0.8319 seconds (batch test took 43.4s)
+  Mean time per image: 0.83 ± 0.21 ms
+  Throughput: 1202.1 FPS
+
+Testing batch size: 64
+Warming up...
+Starting timing...
+  Processed 1000 images in 0.8600 seconds (batch test took 48.2s)
+  Mean time per image: 0.86 ± 0.17 ms
+  Throughput: 1162.7 FPS
+
+Model resnet18 testing completed in 324.9 seconds
+
+Testing resnet18 with grayscale images:
+Using device: cuda:0 (NVIDIA GeForce RTX 4090)
+Loading resnet18 model (grayscale)...
+Model parameters: 11,171,779 total, 4,675 trainable
+Collecting 1000 random image paths...
+Found 1000 images
+
+Testing batch size: 1
+Warming up...
+Starting timing...
+  Processed 1000 images in 4.4161 seconds (batch test took 90.9s)
+  Mean time per image: 4.42 ± 2.49 ms
+  Throughput: 226.4 FPS
+
+Testing batch size: 8
+Warming up...
+Starting timing...
+  Processed 1000 images in 0.9202 seconds (batch test took 51.0s)
+  Mean time per image: 0.92 ± 0.34 ms
+  Throughput: 1086.8 FPS
+
+Testing batch size: 16
+Warming up...
+Starting timing...
+  Processed 1000 images in 0.8685 seconds (batch test took 57.2s)
+  Mean time per image: 0.87 ± 0.28 ms
+  Throughput: 1151.5 FPS
+
+Testing batch size: 32
+Warming up...
+Starting timing...
+  Processed 1000 images in 0.8332 seconds (batch test took 59.9s)
+  Mean time per image: 0.83 ± 0.25 ms
+  Throughput: 1200.2 FPS
+
+Testing batch size: 64
+Warming up...
+Starting timing...
+  Processed 1000 images in 0.8633 seconds (batch test took 76.7s)
+  Mean time per image: 0.86 ± 0.21 ms
+  Throughput: 1158.3 FPS
+
+Model resnet18 testing completed in 396.7 seconds
+
+============================================================
+TESTING RESNET34 (2/2)
+============================================================
+
+Testing resnet34 with RGB images:
+Using device: cuda:0 (NVIDIA GeForce RTX 4090)
+Loading resnet34 model (RGB)...
+Model parameters: 21,286,211 total, 1,539 trainable
+Collecting 1000 random image paths...
+Found 1000 images
+
+Testing batch size: 1
+Warming up...
+Starting timing...
+  Processed 1000 images in 6.5543 seconds (batch test took 69.4s)
+  Mean time per image: 6.55 ± 3.27 ms
+  Throughput: 152.6 FPS
+
+Testing batch size: 8
+Warming up...
+Starting timing...
+  Processed 1000 images in 1.2955 seconds (batch test took 35.9s)
+  Mean time per image: 1.30 ± 0.41 ms
+  Throughput: 771.9 FPS
+
+Testing batch size: 16
+Warming up...
+Starting timing...
+  Processed 1000 images in 1.3973 seconds (batch test took 39.0s)
+  Mean time per image: 1.40 ± 0.42 ms
+  Throughput: 715.7 FPS
+
+Testing batch size: 32
+Warming up...
+Starting timing...
+  Processed 1000 images in 1.4647 seconds (batch test took 44.7s)
+  Mean time per image: 1.46 ± 0.39 ms
+  Throughput: 682.7 FPS
+
+Testing batch size: 64
+Warming up...
+Starting timing...
+  Processed 1000 images in 1.4863 seconds (batch test took 60.8s)
+  Mean time per image: 1.49 ± 0.38 ms
+  Throughput: 672.8 FPS
+
+Model resnet34 testing completed in 304.2 seconds
+
+Testing resnet34 with grayscale images:
+Using device: cuda:0 (NVIDIA GeForce RTX 4090)
+Loading resnet34 model (grayscale)...
+Model parameters: 21,279,939 total, 4,675 trainable
+Collecting 1000 random image paths...
+Found 1000 images
+
+Testing batch size: 1
+Warming up...
+Starting timing...
+  Processed 1000 images in 7.6907 seconds (batch test took 94.7s)
+  Mean time per image: 7.69 ± 3.31 ms
+  Throughput: 130.0 FPS
+
+Testing batch size: 8
+Warming up...
+Starting timing...
+  Processed 1000 images in 1.5003 seconds (batch test took 58.0s)
+  Mean time per image: 1.50 ± 0.47 ms
+  Throughput: 666.5 FPS
+
+Testing batch size: 16
+Warming up...
+Starting timing...
+  Processed 1000 images in 1.3254 seconds (batch test took 48.9s)
+  Mean time per image: 1.33 ± 0.23 ms
+  Throughput: 754.5 FPS
+
+Testing batch size: 32
+Warming up...
+Starting timing...
+  Processed 1000 images in 1.3438 seconds (batch test took 40.9s)
+  Mean time per image: 1.34 ± 0.25 ms
+  Throughput: 744.1 FPS
+
+Testing batch size: 64
+Warming up...
+Starting timing...
+  Processed 1000 images in 1.5289 seconds (batch test took 53.0s)
+  Mean time per image: 1.53 ± 0.43 ms
+  Throughput: 654.1 FPS
+
+Model resnet34 testing completed in 345.1 seconds
+
+================================================================================
+SUMMARY RESULTS
+================================================================================
+
+RESNET18 Results:
+----------------------------------------
+
+RGB Images:
+  Batch size  1:   4.49 ±  2.74 ms/image ( 223.0 FPS)
+  Batch size  8:   0.75 ±  0.20 ms/image (1327.1 FPS)
+  Batch size 16:   0.87 ±  0.29 ms/image (1149.5 FPS)
+  Batch size 32:   0.83 ±  0.21 ms/image (1202.1 FPS)
+  Batch size 64:   0.86 ±  0.17 ms/image (1162.7 FPS)
+
+GRAYSCALE Images:
+  Batch size  1:   4.42 ±  2.49 ms/image ( 226.4 FPS)
+  Batch size  8:   0.92 ±  0.34 ms/image (1086.8 FPS)
+  Batch size 16:   0.87 ±  0.28 ms/image (1151.5 FPS)
+  Batch size 32:   0.83 ±  0.25 ms/image (1200.2 FPS)
+  Batch size 64:   0.86 ±  0.21 ms/image (1158.3 FPS)
+
+RESNET34 Results:
+----------------------------------------
+
+RGB Images:
+  Batch size  1:   6.55 ±  3.27 ms/image ( 152.6 FPS)
+  Batch size  8:   1.30 ±  0.41 ms/image ( 771.9 FPS)
+  Batch size 16:   1.40 ±  0.42 ms/image ( 715.7 FPS)
+  Batch size 32:   1.46 ±  0.39 ms/image ( 682.7 FPS)
+  Batch size 64:   1.49 ±  0.38 ms/image ( 672.8 FPS)
+
+GRAYSCALE Images:
+  Batch size  1:   7.69 ±  3.31 ms/image ( 130.0 FPS)
+  Batch size  8:   1.50 ±  0.47 ms/image ( 666.5 FPS)
+  Batch size 16:   1.33 ±  0.23 ms/image ( 754.5 FPS)
+  Batch size 32:   1.34 ±  0.25 ms/image ( 744.1 FPS)
+  Batch size 64:   1.53 ±  0.43 ms/image ( 654.1 FPS)
+
+Benchmark completed in 22.8 minutes (1370.9 seconds)
+
+Results saved to: timing_results_2025-07-27_18-13-32.txt
+Detailed logs saved to: timing_benchmark_2025-07-27_18-13-32.log

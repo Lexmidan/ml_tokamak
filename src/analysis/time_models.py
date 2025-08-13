@@ -52,13 +52,20 @@ def setup_logging(log_file=None):
 
 
 class TimingDataset(Dataset):
-    """Simple dataset for timing classification"""
+    """Optimized dataset for timing classification - minimizes per-sample overhead"""
     def __init__(self, image_paths, mean, std, grayscale=False):
         self.image_paths = image_paths
-        self.mean = torch.tensor(mean, dtype=torch.float32)
-        self.std = torch.tensor(std, dtype=torch.float32)
         self.grayscale = grayscale
         
+        # Pre-compute normalization tensors to avoid creating them every time
+        if grayscale:
+            self.mean = torch.tensor([0.485], dtype=torch.float32).view(1, 1, 1)
+            self.std = torch.tensor([0.229], dtype=torch.float32).view(1, 1, 1)
+            self.rgb_weights = torch.tensor([0.2989, 0.5870, 0.1140], dtype=torch.float32).view(3, 1, 1)
+        else:
+            self.mean = torch.tensor(mean, dtype=torch.float32).view(3, 1, 1)
+            self.std = torch.tensor(std, dtype=torch.float32).view(3, 1, 1)
+            
     def __len__(self):
         return len(self.image_paths)
     
@@ -67,17 +74,11 @@ class TimingDataset(Dataset):
         image = read_image(img_path).float()
         
         if self.grayscale:
-            # Convert to grayscale using luminance weights
-            weights = torch.tensor([0.2989, 0.5870, 0.1140], dtype=torch.float32).view(3, 1, 1)
-            image = (image * weights).sum(dim=0, keepdim=True)
-            mean = torch.tensor([0.485], dtype=torch.float32).view(1, 1, 1)  # Approximate grayscale mean
-            std = torch.tensor([0.229], dtype=torch.float32).view(1, 1, 1)   # Approximate grayscale std
-        else:
-            mean = self.mean[:, None, None]
-            std = self.std[:, None, None]
+            # Convert to grayscale using pre-computed weights
+            image = (image * self.rgb_weights).sum(dim=0, keepdim=True)
         
-        # Normalize
-        normalized_image = (image - mean) / (255 * std).float()
+        # Normalize using pre-computed tensors
+        normalized_image = (image - self.mean) / (255 * self.std)
         
         return normalized_image
 
@@ -147,19 +148,17 @@ def get_random_image_paths(data_path, n_images=1000, ris_option='RIS1', logger=N
     
     return selected_paths
 
-def time_model_classification(model_name='resnet18', n_images=1000, batch_sizes=[1, 8, 16, 32], 
-                            grayscale=False, ris_option='RIS1', warmup_batches=10, 
-                            print_func=print, logger=None):
+def time_real_time_inference(model_name='resnet18', n_images=1000, grayscale=False, 
+                           ris_option='RIS1', warmup_samples=20, print_func=print, logger=None):
     """
-    Time classification duration for ResNet models
+    Time single-image inference for real-time applications
     
     Args:
         model_name: 'resnet18' or 'resnet34'
         n_images: Number of images to test on
-        batch_sizes: List of batch sizes to test
         grayscale: Whether to use grayscale images
         ris_option: 'RIS1', 'RIS2', or 'both'
-        warmup_batches: Number of warmup batches to run before timing
+        warmup_samples: Number of warmup inferences to run before timing
         print_func: Print function to use (for logging to file)
         logger: Logger instance for detailed logging
     """
@@ -210,121 +209,151 @@ def time_model_classification(model_name='resnet18', n_images=1000, batch_sizes=
     if logger:
         logger.info(collection_info)
     
-    # Create dataset
+    # Create dataset with optimized parameters
     mean = np.array([0.485, 0.456, 0.406])
     std = np.array([0.229, 0.224, 0.225])
     dataset = TimingDataset(image_paths, mean, std, grayscale)
     
-    results = {}
+    # Pre-load samples to GPU memory for pure inference timing
+    print_func("Pre-loading samples to GPU memory...")
+    if logger:
+        logger.info("Pre-loading samples to GPU memory for pure inference timing")
     
-    # Progress bar for batch sizes
-    batch_pbar = tqdm(batch_sizes, desc=f"Testing {model_name}", leave=False)
+    # Load a subset for warmup and timing
+    test_samples = min(n_images, len(dataset))
+    samples = []
     
-    for batch_size in batch_pbar:
-        batch_start_time = time.time()
-        batch_pbar.set_description(f"Testing {model_name} - batch size {batch_size}")
+    # Use progress bar for sample loading
+    sample_pbar = tqdm(range(test_samples), desc="Loading samples", disable=(logger is None))
+    for i in sample_pbar:
+        sample = dataset[i].unsqueeze(0).to(device)
+        samples.append(sample)
+    sample_pbar.close()
+    
+    print_func(f"Loaded {len(samples)} samples to GPU memory")
+    if logger:
+        logger.info(f"Loaded {len(samples)} samples to GPU memory")
+    
+    # Warmup phase
+    print_func(f"Warming up with {warmup_samples} samples...")
+    if logger:
+        logger.info(f"Starting warmup with {warmup_samples} samples")
+    
+    with torch.no_grad():
+        warmup_pbar = tqdm(range(warmup_samples), desc="Warmup", leave=False, disable=(logger is None))
+        for i in warmup_pbar:
+            sample_idx = i % len(samples)
+            _ = model(samples[sample_idx])
+        warmup_pbar.close()
+    
+    # Single-image inference timing (real-time scenario)
+    print_func("Starting single-image inference timing...")
+    if logger:
+        logger.info("Starting single-image inference timing for real-time scenario")
+    
+    inference_times = []
+    
+    with torch.no_grad():
+        timing_pbar = tqdm(samples, desc="Timing single images", leave=False)
         
-        print_func(f"\nTesting batch size: {batch_size}")
-        if logger:
-            logger.info(f"Starting batch size {batch_size} testing")
-        
-        # Create dataloader
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-        
-        # Warmup
-        print_func("Warming up...")
-        if logger:
-            logger.info(f"Starting warmup with {warmup_batches} batches")
-        
-        with torch.no_grad():
-            warmup_pbar = tqdm(range(warmup_batches), desc="Warmup", leave=False, disable=(logger is None))
-            warmup_count = 0
-            for batch in dataloader:
-                if warmup_count >= warmup_batches:
-                    break
-                batch = batch.to(device)
-                _ = model(batch)
-                warmup_count += 1
-                warmup_pbar.update(1)
-            warmup_pbar.close()
-        
-        # Timing
-        print_func("Starting timing...")
-        if logger:
-            logger.info("Starting actual timing measurements")
-        
-        batch_times = []
-        total_images_processed = 0
-        
-        with torch.no_grad():
-            # Progress bar for timing batches
-            timing_pbar = tqdm(dataloader, desc=f"Timing batch_size={batch_size}", leave=False)
+        for sample in timing_pbar:
+            # Time pure inference (no data loading)
+            torch.cuda.synchronize() if device.type == 'cuda' else None
+            inference_start = time.time()
             
-            for batch in timing_pbar:
-                batch = batch.to(device)
-                
-                # Time this batch
-                torch.cuda.synchronize() if device.type == 'cuda' else None
-                batch_start = time.time()
-                
-                _ = model(batch)
-                
-                torch.cuda.synchronize() if device.type == 'cuda' else None
-                batch_end = time.time()
-                
-                batch_time = batch_end - batch_start
-                batch_times.append(batch_time)
-                total_images_processed += batch.size(0)
-                
-                # Update progress bar with current FPS
-                current_fps = batch.size(0) / batch_time
-                timing_pbar.set_postfix({'FPS': f'{current_fps:.1f}'})
+            output = model(sample)
             
-            timing_pbar.close()
+            torch.cuda.synchronize() if device.type == 'cuda' else None
+            inference_end = time.time()
+            
+            inference_time = inference_end - inference_start
+            inference_times.append(inference_time)
+            
+            # Update progress bar with current timing
+            current_ms = inference_time * 1000
+            timing_pbar.set_postfix({'ms': f'{current_ms:.2f}'})
         
-        # Calculate statistics
-        batch_times = np.array(batch_times)
-        total_time = np.sum(batch_times)
-        
-        # Time per image statistics
-        time_per_image = total_time / total_images_processed
-        
-        # Also calculate per-image times for each batch to get std
-        per_image_times = batch_times / np.array([min(batch_size, len(dataset) - i*batch_size) 
-                                                for i in range(len(batch_times))])
-        
-        results[batch_size] = {
-            'total_time': total_time,
-            'total_images': total_images_processed,
-            'mean_time_per_image': time_per_image,
-            'std_time_per_image': np.std(per_image_times),
-            'mean_batch_time': np.mean(batch_times),
-            'std_batch_time': np.std(batch_times),
-            'throughput_fps': total_images_processed / total_time
-        }
-        
-        batch_end_time = time.time()
-        batch_duration = batch_end_time - batch_start_time
-        
-        result_info = (f"  Processed {total_images_processed} images in {total_time:.4f} seconds "
-                      f"(batch test took {batch_duration:.1f}s)")
-        timing_info = f"  Mean time per image: {time_per_image*1000:.2f} ± {np.std(per_image_times)*1000:.2f} ms"
-        throughput_info = f"  Throughput: {total_images_processed/total_time:.1f} FPS"
-        
-        print_func(result_info)
-        print_func(timing_info)
-        print_func(throughput_info)
-        
-        if logger:
-            logger.info(f"Batch size {batch_size} results:")
-            logger.info(result_info)
-            logger.info(timing_info)
-            logger.info(throughput_info)
+        timing_pbar.close()
     
-    batch_pbar.close()
+    # Calculate comprehensive statistics
+    inference_times = np.array(inference_times)
+    
+    # Basic statistics
+    mean_time = np.mean(inference_times)
+    std_time = np.std(inference_times)
+    median_time = np.median(inference_times)
+    min_time = np.min(inference_times)
+    max_time = np.max(inference_times)
+    
+    # Percentiles for real-time analysis
+    p95_time = np.percentile(inference_times, 95)
+    p99_time = np.percentile(inference_times, 99)
+    
+    # Convert to milliseconds
+    mean_ms = mean_time * 1000
+    std_ms = std_time * 1000
+    median_ms = median_time * 1000
+    min_ms = min_time * 1000
+    max_ms = max_time * 1000
+    p95_ms = p95_time * 1000
+    p99_ms = p99_time * 1000
+    
+    # Real-time performance metrics
+    max_fps = 1.0 / mean_time
+    guaranteed_fps_95 = 1.0 / p95_time  # 95% of inferences will be faster than this
+    guaranteed_fps_99 = 1.0 / p99_time  # 99% of inferences will be faster than this
+    
+    results = {
+        'total_samples': len(inference_times),
+        'mean_time_ms': mean_ms,
+        'std_time_ms': std_ms,
+        'median_time_ms': median_ms,
+        'min_time_ms': min_ms,
+        'max_time_ms': max_ms,
+        'p95_time_ms': p95_ms,
+        'p99_time_ms': p99_ms,
+        'max_fps': max_fps,
+        'guaranteed_fps_95': guaranteed_fps_95,
+        'guaranteed_fps_99': guaranteed_fps_99,
+        'raw_times': inference_times
+    }
+    
+    # Print results
+    print_func(f"\nREAL-TIME INFERENCE RESULTS:")
+    print_func(f"  Samples tested: {len(inference_times)}")
+    print_func(f"  Mean inference time: {mean_ms:.2f} ± {std_ms:.2f} ms")
+    print_func(f"  Median inference time: {median_ms:.2f} ms")
+    print_func(f"  Min/Max: {min_ms:.2f} / {max_ms:.2f} ms")
+    print_func(f"  95th percentile: {p95_ms:.2f} ms")
+    print_func(f"  99th percentile: {p99_ms:.2f} ms")
+    print_func(f"")
+    print_func(f"  Real-time performance:")
+    print_func(f"    Maximum FPS: {max_fps:.1f}")
+    print_func(f"    Guaranteed FPS (95%): {guaranteed_fps_95:.1f}")
+    print_func(f"    Guaranteed FPS (99%): {guaranteed_fps_99:.1f}")
+    
+    # Real-time suitability analysis
+    if p99_ms < 10:  # Sub-10ms is excellent for real-time
+        suitability = "EXCELLENT for real-time control"
+    elif p99_ms < 20:  # Sub-20ms is good
+        suitability = "GOOD for real-time control"
+    elif p99_ms < 50:  # Sub-50ms might be acceptable
+        suitability = "ACCEPTABLE for some real-time applications"
+    else:
+        suitability = "MAY BE TOO SLOW for critical real-time control"
+    
+    print_func(f"    Real-time suitability: {suitability}")
+    
+    if logger:
+        logger.info("Real-time inference timing results:")
+        logger.info(f"Mean: {mean_ms:.2f} ± {std_ms:.2f} ms")
+        logger.info(f"95th percentile: {p95_ms:.2f} ms")
+        logger.info(f"99th percentile: {p99_ms:.2f} ms")
+        logger.info(f"Guaranteed FPS (99%): {guaranteed_fps_99:.1f}")
+        logger.info(f"Suitability: {suitability}")
     
     total_duration = time.time() - start_time
-    completion_info = f"Model {model_name} testing completed in {total_duration:.1f} seconds"
+    completion_info = f"Model {model_name} real-time testing completed in {total_duration:.1f} seconds"
     print_func(f"\n{completion_info}")
     if logger:
         logger.info(completion_info)
@@ -333,23 +362,22 @@ def time_model_classification(model_name='resnet18', n_images=1000, batch_sizes=
 
 # Main execution
 def run_timing_benchmark(save_to_file=True, output_file=None, log_file=None):
-    """Run timing benchmark for both ResNet18 and ResNet34"""
+    """Run timing benchmark for both ResNet18 and ResNet34 with focus on real-time single-image inference"""
     
     benchmark_start_time = time.time()
     
     # Setup logging
     logger, actual_log_file = setup_logging(log_file)
     logger.info("="*80)
-    logger.info("STARTING TIMING BENCHMARK")
+    logger.info("STARTING REAL-TIME INFERENCE BENCHMARK")
     logger.info("="*80)
     
     models_to_test = ['resnet18', 'resnet34']
-    batch_sizes = [1, 8, 16, 32, 64]  # Test different batch sizes
     n_images = 1000
     
     logger.info(f"Configuration:")
     logger.info(f"  Models to test: {models_to_test}")
-    logger.info(f"  Batch sizes: {batch_sizes}")
+    logger.info(f"  Test type: Single-image real-time inference")
     logger.info(f"  Number of images: {n_images}")
     logger.info(f"  PyTorch version: {torch.__version__}")
     logger.info(f"  CUDA available: {torch.cuda.is_available()}")
@@ -390,10 +418,9 @@ def run_timing_benchmark(save_to_file=True, output_file=None, log_file=None):
         # Test with RGB images
         print_both(f"\nTesting {model_name} with RGB images:")
         logger.info(f"Testing {model_name} with RGB images")
-        rgb_results = time_model_classification(
+        rgb_results = time_real_time_inference(
             model_name=model_name,
             n_images=n_images,
-            batch_sizes=batch_sizes,
             grayscale=False,
             ris_option='RIS1',
             print_func=print_both,
@@ -404,10 +431,9 @@ def run_timing_benchmark(save_to_file=True, output_file=None, log_file=None):
         # Test with grayscale images
         print_both(f"\nTesting {model_name} with grayscale images:")
         logger.info(f"Testing {model_name} with grayscale images")
-        gray_results = time_model_classification(
+        gray_results = time_real_time_inference(
             model_name=model_name,
             n_images=n_images,
-            batch_sizes=batch_sizes,
             grayscale=True,
             ris_option='RIS1',
             print_func=print_both,
@@ -427,28 +453,42 @@ def run_timing_benchmark(save_to_file=True, output_file=None, log_file=None):
     
     # Print summary
     print_both(f"\n{'='*80}")
-    print_both("SUMMARY RESULTS")
+    print_both("REAL-TIME INFERENCE SUMMARY")
     print_both(f"{'='*80}")
     
     logger.info("Generating summary results")
     
     for model_name in models_to_test:
-        print_both(f"\n{model_name.upper()} Results:")
-        print_both("-" * 40)
+        print_both(f"\n{model_name.upper()} Real-Time Performance:")
+        print_both("-" * 50)
         
         for color_mode in ['rgb', 'grayscale']:
             print_both(f"\n{color_mode.upper()} Images:")
             results = all_results[model_name][color_mode]
             
-            for batch_size, stats in results.items():
-                mean_ms = stats['mean_time_per_image'] * 1000
-                std_ms = stats['std_time_per_image'] * 1000
-                fps = stats['throughput_fps']
-                
-                result_line = (f"  Batch size {batch_size:2d}: "
-                             f"{mean_ms:6.2f} ± {std_ms:5.2f} ms/image "
-                             f"({fps:6.1f} FPS)")
-                print_both(result_line)
+            mean_ms = results['mean_time_ms']
+            std_ms = results['std_time_ms']
+            p99_ms = results['p99_time_ms']
+            max_fps = results['max_fps']
+            guaranteed_fps_99 = results['guaranteed_fps_99']
+            
+            print_both(f"  Mean inference time: {mean_ms:.2f} ± {std_ms:.2f} ms")
+            print_both(f"  99th percentile: {p99_ms:.2f} ms")
+            print_both(f"  Maximum FPS: {max_fps:.1f}")
+            print_both(f"  Guaranteed FPS (99%): {guaranteed_fps_99:.1f}")
+            
+            # Real-time assessment
+            if p99_ms < 10:
+                assessment = "EXCELLENT for real-time control"
+            elif p99_ms < 20:
+                assessment = "GOOD for real-time control"
+            elif p99_ms < 50:
+                assessment = "ACCEPTABLE for some real-time applications"
+            else:
+                assessment = "MAY BE TOO SLOW for critical real-time control"
+            
+            print_both(f"  Assessment: {assessment}")
+    
     
     # Final timing and cleanup
     total_duration = time.time() - benchmark_start_time

@@ -664,7 +664,7 @@ def per_shot_test(path, shots: list, results_df: pd.DataFrame,
             continue
 
         # Sort by time to ensure proper line plotting
-        pred_for_shot = pred_for_shot.sort_values('time').reset_index(drop=True)
+        pred_for_shot = pred_for_shot.reset_index(drop=True)
 
         metrics['shot'].append(shot)
         preds_tensor = torch.tensor(pred_for_shot['prediction'].values.astype(float))
