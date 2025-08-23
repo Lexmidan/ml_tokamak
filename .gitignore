@@ -1,31 +1,17 @@
 ############Those are mine
-/vyzkumny_ukol/preds_vs_actuals
-vyzkumny_ukol/process new imgs.ipynb
 *process_data_for_alt_models.ipynb
-./vyzkumny_ukol/sandbox.ipynb
-/gamma_spice_sim
-/gamma_spice_sim*
 /.vscode
 /data 
-/saved_models
 cross_validation_of_RIS1_model
 cross_validation_of_combined_model
-vyzkumny_ukol/runs
-/recovery
 /runs
-/old_runs
 vyzkumny_ukol/old_runs
-/spice
-vyzkumny_ukol/routine.py
-vyzkumny_ukol/sandbox.ipynb
-vyzkumny_ukol/routine copy.py
-vyzkumny_ukol/PhyDNet/runs
+confidence_time_plots
 PhyDNet/runs
 PhyDNet/data
 cross_validation_results
 
 *.pdf
-
 *.gif
 
 # Byte-compiled / optimized / DLL files

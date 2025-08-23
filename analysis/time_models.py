@@ -14,8 +14,6 @@ from torchvision.models.resnet import ResNet18_Weights, ResNet34_Weights
 from torch.utils.data import DataLoader, Dataset
 from torchvision.io import read_image
 
-# Add the project root directory to sys.path (relative to this file's location)
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 from src.training.LHmode_classifier import create_model_from_config, setup_model
 
 
@@ -258,12 +256,12 @@ def time_real_time_inference(model_name='resnet18', n_images=1000, grayscale=Fal
         
         for sample in timing_pbar:
             # Time pure inference (no data loading)
-            torch.cuda.synchronize() if device.type == 'cuda' else None
+            torch.cuda.synchronize()
             inference_start = time.time()
             
             output = model(sample)
             
-            torch.cuda.synchronize() if device.type == 'cuda' else None
+            torch.cuda.synchronize()
             inference_end = time.time()
             
             inference_time = inference_end - inference_start
@@ -332,25 +330,13 @@ def time_real_time_inference(model_name='resnet18', n_images=1000, grayscale=Fal
     print_func(f"    Guaranteed FPS (95%): {guaranteed_fps_95:.1f}")
     print_func(f"    Guaranteed FPS (99%): {guaranteed_fps_99:.1f}")
     
-    # Real-time suitability analysis
-    if p99_ms < 10:  # Sub-10ms is excellent for real-time
-        suitability = "EXCELLENT for real-time control"
-    elif p99_ms < 20:  # Sub-20ms is good
-        suitability = "GOOD for real-time control"
-    elif p99_ms < 50:  # Sub-50ms might be acceptable
-        suitability = "ACCEPTABLE for some real-time applications"
-    else:
-        suitability = "MAY BE TOO SLOW for critical real-time control"
-    
-    print_func(f"    Real-time suitability: {suitability}")
-    
+
     if logger:
         logger.info("Real-time inference timing results:")
         logger.info(f"Mean: {mean_ms:.2f} ± {std_ms:.2f} ms")
         logger.info(f"95th percentile: {p95_ms:.2f} ms")
         logger.info(f"99th percentile: {p99_ms:.2f} ms")
         logger.info(f"Guaranteed FPS (99%): {guaranteed_fps_99:.1f}")
-        logger.info(f"Suitability: {suitability}")
     
     total_duration = time.time() - start_time
     completion_info = f"Model {model_name} real-time testing completed in {total_duration:.1f} seconds"
@@ -476,18 +462,6 @@ def run_timing_benchmark(save_to_file=True, output_file=None, log_file=None):
             print_both(f"  99th percentile: {p99_ms:.2f} ms")
             print_both(f"  Maximum FPS: {max_fps:.1f}")
             print_both(f"  Guaranteed FPS (99%): {guaranteed_fps_99:.1f}")
-            
-            # Real-time assessment
-            if p99_ms < 10:
-                assessment = "EXCELLENT for real-time control"
-            elif p99_ms < 20:
-                assessment = "GOOD for real-time control"
-            elif p99_ms < 50:
-                assessment = "ACCEPTABLE for some real-time applications"
-            else:
-                assessment = "MAY BE TOO SLOW for critical real-time control"
-            
-            print_both(f"  Assessment: {assessment}")
     
     
     # Final timing and cleanup
