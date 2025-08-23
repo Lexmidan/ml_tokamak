@@ -20,7 +20,7 @@ import pytorch_lightning as pl
 from torchvision.models.resnet import ResNet50_Weights, ResNet34_Weights, ResNet101_Weights, ResNet152_Weights, ResNet18_Weights
 
 from ..utils import confinement_mode_classifier as cmc
-from ..utils.utils import get_project_root
+from ..utils.utils import get_project_root, gen_run_name
 
 
 def setup_logging(log_dir: Path, phase: str = None) -> logging.Logger:
@@ -261,6 +261,8 @@ def save_hyperparameters_and_metrics(path: Path, timestamp: str, phase: str,
     Save hyperparameters and metrics to JSON file and TensorBoard.
     """
     # Create a copy of hyperparameters for TensorBoard (excluding problematic keys)
+    if not timestamp:
+        timestamp = gen_run_name()
     tb_hyperparameters = {}
     json_hyperparameters = {}
     
@@ -380,7 +382,8 @@ def test_and_save_results(model: nn.Module, test_dataloader, timestamp: str,
     """
     logger = logging.getLogger('LHmode_classifier')
     logger.info(f"Starting model testing for phase: {phase}")
-    
+    if not timestamp:
+        timestamp = gen_run_name()
     # Automatically detect project root and ensure the run directory exists
     path = get_project_root()
     run_dir = path / base_dir / f'{timestamp}_{phase}'

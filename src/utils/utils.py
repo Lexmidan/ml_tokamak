@@ -1,4 +1,5 @@
 from pathlib import Path
+import random
 
 def get_project_root() -> Path:
     """
@@ -18,3 +19,10 @@ def get_project_root() -> Path:
         current_dir = Path(__file__).resolve().parent.parent.parent
     
     return current_dir
+
+def gen_run_name():
+    adjs = ['steady', 'quick', 'smart', 'sharp', 'bright', 'bold', 
+            'playful', 'dark', 'charming', 'engaging', 'notable']
+    nouns = ['cat', 'dog', 'fish', 'bird', 'lion', 'tiger', 'bear', 'wolf', 'fox', 'eagle', 
+             'rock', 'tree', 'river', 'mountain', 'cloud', 'star', 'moon', 'sun']
+    return f"{random.choice(adjs)}_{random.choice(nouns)}"

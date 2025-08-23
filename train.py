@@ -17,16 +17,11 @@ from src.training.LHmode_classifier import train_and_test_ris_model
 from src.training.alt_models_training import train_and_test_alt_model
 from src.training.PhyDNet_COMPASS import train_and_eval_PhyDNet
 from src.training.PhyDNet_finetuning import finetune_phydnet
-
-def gen_run_name():
-    adjs = ['steady', 'quick', 'smart', 'sharp', 'bright', 'bold', 
-            'playful', 'dark', 'charming', 'engaging', 'notable']
-    nouns = ['cat', 'dog', 'fish', 'bird', 'lion', 'tiger', 'bear', 'wolf', 'fox', 'eagle', 
-             'rock', 'tree', 'river', 'mountain', 'cloud', 'star', 'moon', 'sun']
-    return f"{random.choice(adjs)}_{random.choice(nouns)}"
+from src.utils.utils import gen_run_name
 
 def main():
     print('#####WARNING: argument is implemented for resnet models only#####') #TODO: implement for other models
+    default_comment = gen_run_name()
     parser = argparse.ArgumentParser(description='Train COMPASS Tokamak classification models')
     parser.add_argument('--model', choices=['resnet', 'alt_models', 'phydnet', 'phydnet_finetune'], 
                        default='resnet', help='Model type to train')
@@ -38,7 +33,8 @@ def main():
                        help='Number of epochs for fine-tuning all layers')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--num_workers', type=int, default=32, help='Number of workers for data loading')
-    parser.add_argument('--comment', type=str, default=gen_run_name(), 
+
+    parser.add_argument('--comment', type=str, default=default_comment, 
                        help='Comment for the training run')
     
 
