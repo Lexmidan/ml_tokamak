@@ -26,7 +26,7 @@ try:
     from src.models.alt_models import *
     from src.models.PhyDNet_models import *
     from src.data_processing.imgs_processing import *
-    from src.analysis.visual import *
+    from analysis.visual import *
 except ImportError as e:
     print(f"Warning: Could not import from new structure: {e}")
     print("Please ensure all dependencies are installed and paths are correct.")

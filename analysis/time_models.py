@@ -374,7 +374,7 @@ def run_timing_benchmark(save_to_file=True, output_file=None, log_file=None):
     # Setup output file
     if save_to_file and output_file is None:
         timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-        output_file = f"timing_results_{timestamp}.txt"
+        output_file = f"timing_results_{timestamp}.log"
     
     # Redirect print function if saving to file
     if save_to_file:
@@ -486,16 +486,4 @@ def run_timing_benchmark(save_to_file=True, output_file=None, log_file=None):
     
     return all_results
 
-# Run the benchmark
-# Save to file by default with timestamp and comprehensive logging
 results = run_timing_benchmark(save_to_file=True)
-
-# Alternative usage examples:
-# Custom filenames:
-# results = run_timing_benchmark(save_to_file=True, output_file="my_timing_results.txt", log_file="my_timing.log")
-
-# Console only (original behavior):
-# results = run_timing_benchmark(save_to_file=False)
-
-# Quick test with specific log file:
-# results = run_timing_benchmark(save_to_file=True, log_file="quick_test.log")

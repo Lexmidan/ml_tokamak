@@ -24,7 +24,7 @@ import numpy as np
 
 from . import LHmode_classifier as LH
 from ..utils import confinement_mode_classifier as cmc
-
+from ..utils.utils import get_project_root
 
 def setup_cv_logging(log_dir: Path, fold_idx: int = None) -> logging.Logger:
     """
@@ -73,7 +73,7 @@ def setup_cv_logging(log_dir: Path, fold_idx: int = None) -> logging.Logger:
     return logger
 
 
-def create_dataloaders_for_both_cameras(path: Path, shots_for_training: pd.DataFrame,
+def create_dataloaders_for_both_cameras(shots_for_training: pd.DataFrame,
                                        shots_for_validation: pd.DataFrame, num_classes: int,
                                        exponential_elm_decay: bool, batch_size: int, num_workers: int,
                                        augmentation: bool, grayscale: bool, test_run: bool = False) -> Tuple[Dict, Dict, object]:
@@ -84,6 +84,7 @@ def create_dataloaders_for_both_cameras(path: Path, shots_for_training: pd.DataF
     Returns:
         Tuple of (dataloaders dict, dataset_sizes dict, validation_dataloader)
     """
+    path = get_project_root()
     logger = logging.getLogger('cross_validation')
     logger.info("Creating dataloaders for 'both' cameras with proper camera availability handling...")
     
@@ -214,7 +215,7 @@ def create_dataloaders_for_both_cameras(path: Path, shots_for_training: pd.DataF
     return dataloaders, dataset_sizes, val_dataloader
 
 
-def load_all_shots_for_both_cameras(path: Path, test_run: bool = False, data_frac: float = 1.0, 
+def load_all_shots_for_both_cameras(test_run: bool = False, data_frac: float = 1.0, 
                                    random_seed: int = 42) -> pd.Series:
     """
     Load ALL shot data for 'both' RIS option for cross-validation (no separate test set).
@@ -228,6 +229,7 @@ def load_all_shots_for_both_cameras(path: Path, test_run: bool = False, data_fra
     Returns:
         Series of all available shots
     """
+    path = get_project_root()
     logger = logging.getLogger('cross_validation')
     logger.info("Loading ALL shot data for 'both' cameras option (no separate test set)...")
     
@@ -253,7 +255,7 @@ def load_all_shots_for_both_cameras(path: Path, test_run: bool = False, data_fra
     return all_shots
 
 
-def load_all_shots_single_camera(path: Path, ris_option: str, test_run: bool = False, 
+def load_all_shots_single_camera(ris_option: str, test_run: bool = False, 
                                  data_frac: float = 1.0, random_seed: int = 42) -> pd.Series:
     """
     Load ALL shot data for single camera option for cross-validation (no separate test set).
@@ -270,6 +272,7 @@ def load_all_shots_single_camera(path: Path, ris_option: str, test_run: bool = F
     """
     logger = logging.getLogger('cross_validation')
     logger.info(f"Loading ALL shot data for '{ris_option}' camera (no separate test set)...")
+    path = get_project_root()
     
     shot_usage = pd.read_csv(f'{path}/data/shot_usageNEW.csv')
     

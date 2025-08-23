@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import sys
 sys.path.append('/compass/Shared/Common/IT/projects/user-libraries/python/cdb_extras/stable/cdb_extras/')
-# import xarray_support as cdbxr   # načítání dat z databáze COMPASSu
+#import xarray_support as cdbxr   # načítání dat z databáze COMPASSu
 from cdb_extras import xarray_support as cdbxr   # načítání dat z databáze COMPASSu
 from pyCDB import client
 import pandas as pd

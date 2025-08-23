@@ -20,6 +20,7 @@ import pytorch_lightning as pl
 from torchvision.models.resnet import ResNet50_Weights, ResNet34_Weights, ResNet101_Weights, ResNet152_Weights, ResNet18_Weights
 
 from ..utils import confinement_mode_classifier as cmc
+from ..utils.utils import get_project_root
 
 
 def setup_logging(log_dir: Path, phase: str = None) -> logging.Logger:
@@ -64,14 +65,13 @@ def setup_logging(log_dir: Path, phase: str = None) -> logging.Logger:
     return logger
 
 
-def load_shot_data(path: Path, ris_option: str, test_df_contains_val_df: bool = True, 
+def load_shot_data(ris_option: str, test_df_contains_val_df: bool = True, 
                   test_run: bool = False, data_frac: float = 1.0, 
                   random_seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Load and split shot data for training, validation, and testing.
     
     Args:
-        path: Path to the data directory
         ris_option: 'RIS1', 'RIS2', or 'both'
         test_df_contains_val_df: Whether to include validation shots in test set
         test_run: Whether to run with limited data for testing
@@ -83,6 +83,9 @@ def load_shot_data(path: Path, ris_option: str, test_df_contains_val_df: bool = 
     """
     logger = logging.getLogger('LHmode_classifier')
     logger.info(f"Loading shot data for {ris_option} option...")
+    
+    # Automatically detect project root
+    path = get_project_root()
     
     shot_usage = pd.read_csv(f'{path}/data/shot_usageNEW.csv')
     
@@ -112,7 +115,7 @@ def load_shot_data(path: Path, ris_option: str, test_df_contains_val_df: bool = 
     return shots_for_testing, shots_for_validation, shots_for_training
 
 
-def create_dataloaders(path: Path, shots_for_training: pd.DataFrame, shots_for_testing: pd.DataFrame,
+def create_dataloaders(shots_for_training: pd.DataFrame, shots_for_testing: pd.DataFrame,
                       shots_for_validation: pd.DataFrame, ris_option: str, num_classes: int,
                       exponential_elm_decay: bool, batch_size: int, num_workers: int,
                       augmentation: bool, grayscale: bool) -> Tuple[Dict, Dict]:
@@ -126,6 +129,9 @@ def create_dataloaders(path: Path, shots_for_training: pd.DataFrame, shots_for_t
     logger.info(f"Creating dataloaders with batch_size={batch_size}, num_workers={num_workers}")
     logger.info(f"Configuration: ris_option={ris_option}, num_classes={num_classes}, "
                 f"augmentation={augmentation}, grayscale={grayscale}")
+    
+    # Automatically detect project root
+    path = get_project_root()
     
     shot_numbers = pd.concat([shots_for_training, shots_for_testing, shots_for_validation])
     
@@ -285,12 +291,17 @@ def save_hyperparameters_and_metrics(path: Path, timestamp: str, phase: str,
     # Save to JSON
     all_hparams = {**json_hyperparameters, **one_digit_metrics}
     json_str = json.dumps(all_hparams, indent=4)
-    with open(f'{path}/{base_dir}/{timestamp}_{phase}/hparams.json', 'w') as f:
+    
+    # Ensure the directory exists
+    json_path = path / base_dir / f'{timestamp}_{phase}' / 'hparams.json'
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(json_path, 'w') as f:
         f.write(json_str)
 
 
 def train_phase(model: nn.Module, dataloaders: Dict, dataset_sizes: Dict, 
-               timestamp: str, path: Path, phase: str, num_epochs: int,
+               timestamp: str, phase: str, num_epochs: int,
                learning_rate_min: float, learning_rate_max: float, 
                weight_decay: float, freeze_backbone: bool = True,
                base_dir: str = 'runs') -> nn.Module:
@@ -302,7 +313,6 @@ def train_phase(model: nn.Module, dataloaders: Dict, dataset_sizes: Dict,
         dataloaders: Dictionary containing train and val dataloaders
         dataset_sizes: Dictionary containing dataset sizes
         timestamp: Timestamp for model naming
-        path: Base path for saving
         phase: 'last_fc' or 'all_layers'
         num_epochs: Number of epochs to train
         learning_rate_min: Minimum learning rate
@@ -319,7 +329,12 @@ def train_phase(model: nn.Module, dataloaders: Dict, dataset_sizes: Dict,
     logger.info(f"Starting training phase: {phase_name} for {num_epochs} epochs")
     logger.info(f"Learning rate range: {learning_rate_min} to {learning_rate_max}, weight_decay: {weight_decay}")
     
-    writer = SummaryWriter(f'{base_dir}/{timestamp}_{phase}')
+    # Automatically detect project root and ensure the run directory exists
+    path = get_project_root()
+    run_dir = path / base_dir / f'{timestamp}_{phase}'
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    writer = SummaryWriter(str(run_dir))
     
     # Set parameter gradients based on training phase
     for param in model.parameters():
@@ -335,9 +350,9 @@ def train_phase(model: nn.Module, dataloaders: Dict, dataset_sizes: Dict,
         model, learning_rate_min, learning_rate_max, weight_decay,
         dataset_sizes['train'], num_epochs)
     
-    # Model save path
-    model_path = Path(f'{path}/{base_dir}/{timestamp}_{phase}/model.pt')
-    chkpt_path = model_path.with_name(f'{model_path.stem}_best_val_acc{model_path.suffix}')
+    # Model save paths
+    model_path = run_dir / 'model.pt'
+    chkpt_path = run_dir / f'model_best_val_acc.pt'
     
     logger.info(f"Model will be saved to: {model_path}")
     
@@ -357,7 +372,7 @@ def train_phase(model: nn.Module, dataloaders: Dict, dataset_sizes: Dict,
     return model
 
 
-def test_and_save_results(model: nn.Module, test_dataloader, path: Path, timestamp: str, 
+def test_and_save_results(model: nn.Module, test_dataloader, timestamp: str, 
                          phase: str, shots_for_testing: pd.DataFrame, num_classes: int,
                          ris_option: str, hyperparameters: Dict, base_dir: str = 'runs'):
     """
@@ -366,30 +381,35 @@ def test_and_save_results(model: nn.Module, test_dataloader, path: Path, timesta
     logger = logging.getLogger('LHmode_classifier')
     logger.info(f"Starting model testing for phase: {phase}")
     
-    writer = SummaryWriter(f'{base_dir}/{timestamp}_{phase}')
+    # Automatically detect project root and ensure the run directory exists
+    path = get_project_root()
+    run_dir = path / base_dir / f'{timestamp}_{phase}'
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    writer = SummaryWriter(str(run_dir))
     
     # Test the model
     logger.info("Running model evaluation on test dataset...")
     metrics = cmc.test_model(
-        f'{base_dir}/{timestamp}_{phase}', model, test_dataloader, comment='', 
+        str(run_dir), model, test_dataloader, comment='', 
         writer=writer, num_classes=num_classes, signal_name='img')
 
     # Save predictions
-    prediction_path = f'{path}/{base_dir}/{timestamp}_{phase}/prediction_df.csv'
+    prediction_path = run_dir / 'prediction_df.csv'
     metrics['prediction_df'].to_csv(prediction_path)
     logger.info(f"Predictions saved to: {prediction_path}")
 
     # Per-shot analysis
     logger.info("Performing per-shot analysis...")
     metrics_per_shot = cmc.per_shot_test(
-        path=f'{path}/{base_dir}/{timestamp}_{phase}/', 
+        path=str(run_dir) + '/', 
         shots=shots_for_testing.values.tolist(), 
         results_df=metrics['prediction_df'], 
         writer=writer,
         num_classes=num_classes,
         two_images=ris_option=='both')
 
-    metrics_path = f'{path}/{base_dir}/{timestamp}_{phase}/metrics_per_shot.csv'
+    metrics_path = run_dir / 'metrics_per_shot.csv'
     pd.DataFrame(metrics_per_shot).to_csv(metrics_path)
     logger.info(f"Per-shot metrics saved to: {metrics_path}")
     
@@ -481,12 +501,12 @@ def train_and_test_ris_model(ris_option: str = 'both',
     # Setup
     comment_for_model_name = ris_option + comment_for_model_name
     pl.seed_everything(random_seed)
-    path = Path(os.getcwd())
+    path = get_project_root()  # Use project root instead of current working directory
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
     timestamp = datetime.fromtimestamp(time.time()).strftime("%y-%m-%d, %H-%M-%S ") + comment_for_model_name
 
     # Setup logging - create a temporary logger for initial setup
-    temp_log_dir = Path(f'{path}/runs/{timestamp}_setup')
+    temp_log_dir = path / 'runs' / f'{timestamp}_setup'
     logger = setup_logging(temp_log_dir)
     
     logger.info("="*60)
@@ -504,14 +524,14 @@ def train_and_test_ris_model(ris_option: str = 'both',
     # Load and prepare data
     logger.info("Phase 1/5: Loading and preparing data...")
     shots_for_testing, shots_for_validation, shots_for_training = load_shot_data(
-        path, 'RIS1' if ris_option == 'both' else ris_option, 
+        'RIS1' if ris_option == 'both' else ris_option, 
         test_df_contains_val_df, test_run, data_frac, random_seed)
     
     # Handle 'both' option by combining RIS1 and RIS2 data
     if ris_option == 'both':
         logger.info("Loading additional RIS2 data for 'both' option...")
         shots_for_testing_ris2, shots_for_validation_ris2, shots_for_training_ris2 = load_shot_data(
-            path, 'RIS2', test_df_contains_val_df, test_run, data_frac, random_seed)
+            'RIS2', test_df_contains_val_df, test_run, data_frac, random_seed)
         
         shots_for_testing = pd.concat([shots_for_testing, shots_for_testing_ris2]).reset_index(drop=True)
         shots_for_validation = pd.concat([shots_for_validation, shots_for_validation_ris2]).reset_index(drop=True)
@@ -521,7 +541,7 @@ def train_and_test_ris_model(ris_option: str = 'both',
     # Create dataloaders
     logger.info("Phase 2/5: Creating dataloaders...")
     dataloaders, dataset_sizes, test_dataloader = create_dataloaders(
-        path, shots_for_training, shots_for_testing, shots_for_validation,
+        shots_for_training, shots_for_testing, shots_for_validation,
         ris_option, num_classes, exponential_elm_decay, batch_size, 
         num_workers, augmentation, grayscale)
 

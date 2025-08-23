@@ -14,7 +14,7 @@ import pytorch_lightning as pl
 
 from ..models import alt_models as am
 from ..utils import confinement_mode_classifier as cmc
-
+from LHmode_classifier import get_project_root
 
 
 def train_and_test_alt_model(signal_name = 'divlp',
@@ -48,7 +48,7 @@ def train_and_test_alt_model(signal_name = 'divlp',
 
     pl.seed_everything(random_seed)
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-    path = Path(os.getcwd())
+    path = get_project_root()
     comment_for_model_name = architecture  + comment_for_model_name
     
     # Load data

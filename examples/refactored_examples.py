@@ -19,6 +19,7 @@ from src.training.LHmode_classifier import (
     train_phase,
     test_and_save_results
 )
+from src.utils.utils import get_project_root
 
 
 def example_basic_training():
@@ -60,17 +61,16 @@ def example_manual_training_pipeline():
     print("Running manual training pipeline example...")
     
     # Setup
-    path = Path('.')
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
     
     # Load data
     shots_testing, shots_validation, shots_training = load_shot_data(
-        path, 'RIS1', test_df_contains_val_df=True, 
+        'RIS1', test_df_contains_val_df=True, 
         test_run=True, data_frac=1.0, random_seed=42)
     
     # Create dataloaders
     dataloaders, dataset_sizes, test_dataloader = create_dataloaders(
-        path, shots_training, shots_testing, shots_validation,
+        shots_training, shots_testing, shots_validation,
         'RIS1', num_classes=3, exponential_elm_decay=True,
         batch_size=16, num_workers=4, augmentation=False, grayscale=False)
     
@@ -81,7 +81,7 @@ def example_manual_training_pipeline():
     # Train only FC layer
     model = train_phase(
         model, dataloaders, dataset_sizes, 
-        timestamp='manual_example', path=path, phase='last_fc',
+        timestamp='manual_example', phase='last_fc',
         num_epochs=2, learning_rate_min=0.001, learning_rate_max=0.01,
         weight_decay=1e-4, freeze_backbone=True)
     
