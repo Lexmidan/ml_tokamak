@@ -103,6 +103,38 @@ def train_and_test_alt_model(signal_name = 'divlp',
     timestamp =  datetime.fromtimestamp(time.time()).strftime("%y-%m-%d, %H-%M-%S ") + comment_for_model_name
     writer = SummaryWriter(f'runs/{timestamp}')
     model_path = Path(f'{path}/runs/{timestamp}/model.pt')
+    hparams_path = f'{path}/runs/{timestamp}/hparams.json'
+
+    # Create hyperparameters dictionary with all input parameters
+    hyperparameters = {
+        'batch_size': batch_size,
+        'num_epochs': num_epochs,
+        'learning_rate_min': learning_rate_min,
+        'learning_rate_max': learning_rate_max,
+        'weight_decay': weight_decay,
+        'shots_for_testing': shots_for_testing.values.tolist(),
+        'shots_for_validation': shots_for_validation.values.tolist(),
+        'shots_for_training': shots_for_training.values.tolist(),
+        'signal_name': signal_name,
+        'num_classes': num_classes,
+        'sampling_frequency': sampling_freq,
+        'random_seed': random_seed,
+        'architecture': architecture,
+        'signal_window': signal_window,
+        'dpoints_in_future': dpoints_in_future,
+        'exponential_elm_decay': exponential_elm_decay,
+        'only_ELMS': 'True' if only_ELMs else 'False',
+        'use_ELMs': use_ELMs,
+        'no_L_mode': no_L_mode,
+        'test_df_contains_val_df': test_df_contains_val_df,
+        'test_run': test_run,
+        'comment_for_model_name': comment_for_model_name,
+        'num_workers': num_workers
+    }
+    
+    # Save hyperparameters immediately
+    with open(hparams_path, 'w') as f:
+        json.dump(hyperparameters, f, indent=4)
 
     # Create model
     untrained_model = am.select_model_architecture(architecture=architecture, window=signal_window, 
@@ -119,26 +151,12 @@ def train_and_test_alt_model(signal_name = 'divlp',
 
     exp_lr_scheduler = lr_scheduler.OneCycleLR(optimizer, max_lr=learning_rate_max, steps_per_epoch=dataset_sizes['train'], epochs=num_epochs) #!!!
 
-    hyperparameters = {
-    'batch_size': batch_size,
-    'num_epochs': num_epochs,
-    'optimizer': optimizer.__class__.__name__,
-    'criterion': criterion.__class__.__name__,
-    'learning_rate_max': learning_rate_max,
-    'scheduler': exp_lr_scheduler.__class__.__name__,
-    'shots_for_testing': torch.tensor(shots_for_testing.values.tolist()),
-    'shots_for_validation': torch.tensor(shots_for_validation.values.tolist()),
-    'shots_for_training': torch.tensor(shots_for_training.values.tolist()),
-    'signal_name': signal_name,
-    'num_classes': num_classes,
-    'sampling_frequency':sampling_freq,
-    'random_seed': random_seed,
-    'architecture': architecture,
-    'signal_window': signal_window,
-    'dpoints_in_future': dpoints_in_future,
-    'exponential_elm_decay': exponential_elm_decay,
-    'only_ELMS': 'True' if only_ELMs else 'False',
-    }
+    # Add training-specific hyperparameters
+    hyperparameters.update({
+        'optimizer': optimizer.__class__.__name__,
+        'criterion': criterion.__class__.__name__,
+        'scheduler': exp_lr_scheduler.__class__.__name__,
+    })
 
     # Train model
     model = cmc.train_model(untrained_model, criterion, optimizer, exp_lr_scheduler, 
@@ -175,18 +193,24 @@ def train_and_test_alt_model(signal_name = 'divlp',
         one_digit_metrics['PR AUC H-mode on test_dataset'] = metrics['pr_roc_curves']['pr_auc'][1].tolist()
         one_digit_metrics['PR AUC ELM on test_dataset'] = metrics['pr_roc_curves']['pr_auc'][2].tolist()
     
+    # Add metrics to hyperparameters and save final version
+    hyperparameters.update(one_digit_metrics)
+    
+    # For TensorBoard, need to convert shots to tensors
+    tb_hyperparameters = {k: v for k, v in hyperparameters.items() 
+                         if k not in ['shots_for_testing', 'shots_for_validation', 'shots_for_training']}
+    tb_hyperparameters.update({
+        'shots_for_testing': torch.tensor(hyperparameters['shots_for_testing']),
+        'shots_for_validation': torch.tensor(hyperparameters['shots_for_validation']),
+        'shots_for_training': torch.tensor(hyperparameters['shots_for_training'])
+    })
 
-    writer.add_hparams(hyperparameters, one_digit_metrics)
+    writer.add_hparams(tb_hyperparameters, one_digit_metrics)
     writer.close()
     
-    # Save hyperparameters and metrics to a JSON file
-    for key in ['shots_for_testing', 'shots_for_validation', 'shots_for_training']:
-        hyperparameters[key] = hyperparameters[key].tolist()  # Convert tensors to lists
-    all_hparams = {**hyperparameters, **one_digit_metrics}
-    # Convert to JSON
-    json_str = json.dumps(all_hparams, indent=4)
-    with open(f'{path}/runs/{timestamp}/hparams.json', 'w') as f:
-        f.write(json_str)
+    # Save final hyperparameters with metrics to JSON
+    with open(hparams_path, 'w') as f:
+        json.dump(hyperparameters, f, indent=4)
 
 if __name__ == "__main__":
     train_and_test_alt_model(signal_name = 'mc',

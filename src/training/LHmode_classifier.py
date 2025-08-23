@@ -254,11 +254,47 @@ def create_optimizer_and_scheduler(model: nn.Module, learning_rate_min: float,
     return optimizer, exp_lr_scheduler
 
 
+def save_hyperparameters(path: Path, timestamp: str, hyperparameters: Dict, 
+                        phase: str = None, base_dir: str = 'runs'):
+    """
+    Save hyperparameters to JSON file.
+    
+    Args:
+        path: Project root path
+        timestamp: Timestamp for the run
+        hyperparameters: Dictionary of hyperparameters to save
+        phase: Training phase (e.g., 'last_fc', 'all_layers')
+        base_dir: Base directory for saving (default: 'runs')
+    """
+    # Create a copy for JSON serialization
+    json_hyperparameters = {}
+    
+    for key, value in hyperparameters.items():
+        # Convert tensors and arrays to lists for JSON serialization
+        if hasattr(value, 'tolist'):
+            json_hyperparameters[key] = value.tolist()
+        else:
+            json_hyperparameters[key] = value
+    
+    # Determine the correct directory path
+    if phase:
+        json_path = path / base_dir / f'{timestamp}_{phase}' / 'hparams.json'
+    else:
+        json_path = path / base_dir / f'{timestamp}' / 'hparams.json'
+    
+    # Ensure the directory exists
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save to JSON
+    with open(json_path, 'w') as f:
+        json.dump(json_hyperparameters, f, indent=4)
+
+
 def save_hyperparameters_and_metrics(path: Path, timestamp: str, phase: str, 
                                     hyperparameters: Dict, metrics: Dict, writer: SummaryWriter,
                                     base_dir: str = 'runs'):
     """
-    Save hyperparameters and metrics to JSON file and TensorBoard.
+    Update hyperparameters file with metrics and save to JSON and TensorBoard.
     """
     # Create a copy of hyperparameters for TensorBoard (excluding problematic keys)
     if not timestamp:
@@ -290,16 +326,15 @@ def save_hyperparameters_and_metrics(path: Path, timestamp: str, phase: str,
     
     writer.add_hparams(tb_hyperparameters, one_digit_metrics)
     
-    # Save to JSON
-    all_hparams = {**json_hyperparameters, **one_digit_metrics}
-    json_str = json.dumps(all_hparams, indent=4)
+    # Add metrics to hyperparameters and save updated version
+    json_hyperparameters.update(one_digit_metrics)
     
-    # Ensure the directory exists
+    # Ensure the directory exists and save updated hyperparameters
     json_path = path / base_dir / f'{timestamp}_{phase}' / 'hparams.json'
     json_path.parent.mkdir(parents=True, exist_ok=True)
     
     with open(json_path, 'w') as f:
-        f.write(json_str)
+        json.dump(json_hyperparameters, f, indent=4)
 
 
 def train_phase(model: nn.Module, dataloaders: Dict, dataset_sizes: Dict, 
@@ -552,20 +587,39 @@ def train_and_test_ris_model(ris_option: str = 'both',
     logger.info("Phase 3/5: Setting up model...")
     model = setup_model(pretrained_model, num_classes, device, grayscale)
 
-    # Create base hyperparameters dictionary
-    base_hyperparameters = {
-        'model': model.__class__.__name__,
-        'batch_size': batch_size,
+    # Create complete hyperparameters dictionary immediately
+    hyperparameters = {
         'ris_option': ris_option,
+        'model': pretrained_model.__class__.__name__,
+        'num_workers': num_workers,
+        'num_epochs_for_fc': num_epochs_for_fc,
+        'num_epochs_for_all_layers': num_epochs_for_all_layers,
         'num_classes': num_classes,
-        'second_image': 'None',
-        'augmentation': "applied" if augmentation else "no augmentation",
+        'batch_size': batch_size,
+        'learning_rate_min': learning_rate_min,
+        'learning_rate_max': learning_rate_max,
+        'comment_for_model_name': comment_for_model_name,
         'random_seed': random_seed,
+        'augmentation': augmentation,
+        'test_df_contains_val_df': test_df_contains_val_df,
+        'test_run': test_run,
+        'exponential_elm_decay': exponential_elm_decay,
+        'grayscale': grayscale,
         'weight_decay': weight_decay,
+        'data_frac': data_frac,
         'shots_for_testing': shots_for_testing.values.tolist(),
         'shots_for_validation': shots_for_validation.values.tolist(),
         'shots_for_training': shots_for_training.values.tolist(),
+        'second_image': 'None',
+        'optimizer': 'AdamW',
+        'criterion': 'CrossEntropyLoss',
+        'scheduler': 'OneCycleLR',
     }
+    
+    # Save hyperparameters immediately for both phases
+    logger.info("Saving initial hyperparameters...")
+    save_hyperparameters(path, timestamp, hyperparameters, 'last_fc')
+    save_hyperparameters(path, timestamp, hyperparameters, 'all_layers')
 
     # Phase 1: Train only the fully connected layer
     logger.info("Phase 4a/5: Training fully connected layer...")
@@ -576,23 +630,17 @@ def train_and_test_ris_model(ris_option: str = 'both',
     setup_logging(fc_log_dir, 'last_fc')
     
     model = train_phase(
-        model, dataloaders, dataset_sizes, timestamp, path, 'last_fc',
+        model, dataloaders, dataset_sizes, timestamp, 'last_fc',
         num_epochs_for_fc, learning_rate_min, learning_rate_max, weight_decay,
         freeze_backbone=True)
 
-    # Test after FC training
-    fc_hyperparameters = {
-        **base_hyperparameters,
-        'num_epochs': num_epochs_for_fc,
-        'optimizer': 'AdamW',
-        'criterion': 'CrossEntropyLoss',
-        'learning_rate_max': learning_rate_max,
-        'scheduler': 'OneCycleLR',
-    }
+    # Test after FC training and add metrics to hyperparameters
+    fc_hyperparameters = hyperparameters.copy()
+    fc_hyperparameters['num_epochs'] = num_epochs_for_fc
     
     logger.info("Testing FC-only model...")
     test_and_save_results(
-        model, test_dataloader, path, timestamp, 'last_fc',
+        model, test_dataloader, timestamp, 'last_fc',
         shots_for_testing, num_classes, ris_option, fc_hyperparameters)
 
     # Phase 2: Fine-tune all layers
@@ -605,23 +653,17 @@ def train_and_test_ris_model(ris_option: str = 'both',
     setup_logging(all_layers_log_dir, 'all_layers')
     
     model = train_phase(
-        model, dataloaders, dataset_sizes, timestamp, path, 'all_layers',
+        model, dataloaders, dataset_sizes, timestamp, 'all_layers',
         num_epochs_for_all_layers, learning_rate_min, learning_rate_max, weight_decay,
         freeze_backbone=False)
 
-    # Test after full training
-    all_layers_hyperparameters = {
-        **base_hyperparameters,
-        'num_epochs': num_epochs_for_all_layers,
-        'optimizer': 'AdamW',
-        'criterion': 'CrossEntropyLoss',
-        'learning_rate_max': learning_rate_max,
-        'scheduler': 'OneCycleLR',
-    }
+    # Test after full training and add metrics to hyperparameters
+    all_layers_hyperparameters = hyperparameters.copy()
+    all_layers_hyperparameters['num_epochs'] = num_epochs_for_all_layers
     
     logger.info("Testing full model...")
     test_and_save_results(
-        model, test_dataloader, path, timestamp, 'all_layers',
+        model, test_dataloader, timestamp, 'all_layers',
         shots_for_testing, num_classes, ris_option, all_layers_hyperparameters)
 
     model_path = Path(f'{path}/runs/{timestamp}_all_layers/model.pt')
