@@ -102,11 +102,11 @@ def load_shot_data(ris_option: str, test_df_contains_val_df: bool = True,
         shots_for_testing = pd.concat([shots_for_testing, shots_for_validation])
     
     if test_run:
-        shots_for_testing = shots_for_testing[:3]
-        shots_for_validation = shots_for_validation[:3]
-        shots_for_training = shots_for_training[:3]
-        logger.info("Running in test mode with limited data (3 shots each)")
-    
+        shots_for_testing = shots_for_testing.sample(n=2, random_state=random_seed)
+        shots_for_validation = shots_for_validation.sample(n=2, random_state=random_seed)
+        shots_for_training = shots_for_training.sample(n=2, random_state=random_seed)
+        logger.info("Running in test mode with limited data (2 shots each)")
+
     shots_for_training = shots_for_training.sample(frac=data_frac, random_state=random_seed)
     
     logger.info(f"Data split complete - Training: {len(shots_for_training)}, "
@@ -135,31 +135,12 @@ def create_dataloaders(shots_for_training: pd.DataFrame, shots_for_testing: pd.D
     
     shot_numbers = pd.concat([shots_for_training, shots_for_testing, shots_for_validation])
     
-    # Handle the 'both' case properly
-    if ris_option == 'both':
-        logger.info("Loading data for both RIS1 and RIS2...")
-        # For 'both', we need to load RIS1 data first, then combine with RIS2
-        shot_df, test_df, val_df, train_df = cmc.load_and_split_dataframes(
-            path, shot_numbers, shots_for_training, shots_for_testing, 
-            shots_for_validation, use_ELMS=num_classes==3, ris_option='RIS1',
-            exponential_elm_decay=exponential_elm_decay)
-        
-        # Load RIS2 data and combine
-        shot_df_ris2, test_df_ris2, val_df_ris2, train_df_ris2 = cmc.load_and_split_dataframes(
-            path, shot_numbers, shots_for_training, shots_for_testing, 
-            shots_for_validation, use_ELMS=num_classes==3, ris_option='RIS2',
-            exponential_elm_decay=exponential_elm_decay)
-        
-        test_df = pd.concat([test_df, test_df_ris2]).reset_index(drop=True)
-        val_df = pd.concat([val_df, val_df_ris2]).reset_index(drop=True)
-        train_df = pd.concat([train_df, train_df_ris2]).reset_index(drop=True)
-        logger.info("Combined RIS1 and RIS2 data successfully")
-    else:
-        logger.info(f"Loading data for {ris_option}...")
-        shot_df, test_df, val_df, train_df = cmc.load_and_split_dataframes(
-            path, shot_numbers, shots_for_training, shots_for_testing, 
-            shots_for_validation, use_ELMS=num_classes==3, ris_option=ris_option,
-            exponential_elm_decay=exponential_elm_decay)
+
+    logger.info(f"Loading data for {ris_option}...")
+    shot_df, test_df, val_df, train_df = cmc.load_and_split_dataframes(
+        path, shot_numbers, shots_for_training, shots_for_testing, 
+        shots_for_validation, use_ELMS=num_classes==3, ris_option=ris_option,
+        exponential_elm_decay=exponential_elm_decay)
     
     logger.info("Creating dataloaders...")
     test_dataloader = cmc.get_dloader(test_df, path, batch_size, balance_data=False, 

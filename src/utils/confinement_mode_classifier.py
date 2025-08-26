@@ -168,6 +168,36 @@ class TwoImagesModel(nn.Module):
         return x   
     
 
+def _apply_exponential_elm_decay(df):
+    """
+    Helper function to apply exponential ELM decay logic to a dataframe.
+    This creates soft labels for ELM transitions.
+    """
+    df['soft_label'] = df.apply(lambda x: [0, 1, 0] if x['mode'] == 'H-mode' else [1, 0, 0], axis=1)            
+    #Pre peak and post peak time
+    pre_time = 1
+    post_time = 2
+    if df['mode'].str.contains('ELM-peak').any():
+        for elm_peak in df[df['mode'] == 'ELM-peak']['time']:
+            
+            # Pre-ELM probabilities
+            pre_indices = df.loc[df['time'].between(elm_peak-pre_time, elm_peak)].index
+            if not pre_indices.empty:
+                pre_elm_prob = np.exp(-5 * np.linspace(pre_time, 0, len(pre_indices)))
+                for i, prob in zip(pre_indices, pre_elm_prob):
+                    df.at[i, 'soft_label'] = [0, 1 - np.max([prob, df.at[i, 'soft_label'][2]]), 
+                                            np.max([prob, df.at[i, 'soft_label'][2]])]
+            
+            # Post-ELM probabilities
+            post_indices = df.loc[df['time'].between(elm_peak, elm_peak+post_time)].index
+            if not post_indices.empty:
+                post_elm_prob = np.exp(-3 * np.linspace(0, post_time, len(post_indices)))
+                for i, prob in zip(post_indices, post_elm_prob):
+                    df.at[i, 'soft_label'] = [0, 1 - np.max([prob, df.at[i, 'soft_label'][2]]), 
+                                            np.max([prob, df.at[i, 'soft_label'][2]])]
+    return df
+
+
 def load_and_split_dataframes(path:Path, shots:list, shots_for_training:list, shots_for_testing:list, shots_for_validation:list,
                             use_ELMS: bool = True, ris_option: str = 'RIS1', exponential_elm_decay: bool=True):
     '''
@@ -182,36 +212,66 @@ def load_and_split_dataframes(path:Path, shots:list, shots_for_training:list, sh
     
     shot_df = pd.DataFrame([])
 
+    # Load shot usage information for 'both' cameras option
+    if ris_option == 'both':
+        shot_usage = pd.read_csv(f'{path}/data/shot_usageNEW.csv')
+        shot_usage_dict = shot_usage.set_index('shot')[['used_for_ris1', 'used_for_ris2']].to_dict('index')
+
     for shot in shots:
-        df = pd.read_csv(f'{path}/data/LH_alpha/LH_alpha_shot_{shot}.csv')
-        df['shot'] = shot
-        df = df.iloc[:-100] #Drop last 100 rows, because sometimes RIS cameras don't end at the same time :C
-        
-        if exponential_elm_decay and use_ELMS: #This creates soft labels for 2 classes
-            df['soft_label'] = df.apply(lambda x: [0, 1, 0] if x['mode'] == 'H-mode' else [1, 0, 0], axis=1)            
-            #Pre peak and post peak time
-            pre_time = 1
-            post_time = 2
-            if df['mode'].str.contains('ELM-peak').any():
-                for elm_peak in df[df['mode'] == 'ELM-peak']['time']:
+        if ris_option == 'both':
+            # Handle both cameras case - load data from available cameras
+            if shot not in shot_usage_dict:
+                print(f"Warning: Shot {shot} not found in shot_usageNEW.csv, skipping...")
+                continue
+                
+            shot_info = shot_usage_dict[shot]
+            
+            # Load RIS1 data if available
+            if shot_info['used_for_ris1']:
+                try:
+                    df_ris1 = pd.read_csv(f'{path}/data/LH_alpha/LH_alpha_shot_{shot}.csv')
+                    df_ris1['shot'] = shot
+                    df_ris1 = df_ris1.iloc[:-100]  # Drop last 100 rows
                     
-                    # Pre-ELM probabilities
-                    pre_indices = df.loc[df['time'].between(elm_peak-pre_time, elm_peak)].index
-                    if not pre_indices.empty:
-                        pre_elm_prob = np.exp(-5 * np.linspace(pre_time, 0, len(pre_indices)))
-                        for i, prob in zip(pre_indices, pre_elm_prob):
-                            df.at[i, 'soft_label'] = [0, 1 - np.max([prob, df.at[i, 'soft_label'][2]]), 
-                                                    np.max([prob, df.at[i, 'soft_label'][2]])]
-                    
-                    # Post-ELM probabilities
-                    post_indices = df.loc[df['time'].between(elm_peak, elm_peak+post_time)].index
-                    if not post_indices.empty:
-                        post_elm_prob = np.exp(-3 * np.linspace(0, post_time, len(post_indices)))
-                        for i, prob in zip(post_indices, post_elm_prob):
-                            df.at[i, 'soft_label'] = [0, 1 - np.max([prob, df.at[i, 'soft_label'][2]]), 
-                                                    np.max([prob, df.at[i, 'soft_label'][2]])]
+                    if exponential_elm_decay and use_ELMS:
+                        df_ris1 = _apply_exponential_elm_decay(df_ris1)
                             
-        shot_df = pd.concat([shot_df, df], axis=0)
+                    shot_df = pd.concat([shot_df, df_ris1], axis=0)
+                except FileNotFoundError:
+                    print(f"Warning: RIS1 data file not found for shot {shot}")
+            
+            # Load RIS2 data if available
+            if shot_info['used_for_ris2']:
+                try:
+                    df_ris2 = pd.read_csv(f'{path}/data/LH_alpha/LH_alpha_shot_{shot}.csv')
+                    df_ris2['shot'] = shot
+                    df_ris2 = df_ris2.iloc[:-100]  # Drop last 100 rows
+                    # Convert RIS1 filenames to RIS2
+                    df_ris2['filename'] = df_ris2['filename'].str.replace('RIS1', 'RIS2')
+                    
+                    # Filter out rows where RIS2 image doesn't exist
+                    def image_exists(filename):
+                        return os.path.exists(os.path.join(path, filename))
+                    
+                    exists_mask = df_ris2['filename'].apply(image_exists)
+                    df_ris2 = df_ris2[exists_mask]
+                    
+                    if exponential_elm_decay and use_ELMS:
+                        df_ris2 = _apply_exponential_elm_decay(df_ris2)
+                    
+                    shot_df = pd.concat([shot_df, df_ris2], axis=0)
+                except FileNotFoundError:
+                    print(f"Warning: RIS2 data file not found for shot {shot}")
+        else:
+            # Original single camera logic
+            df = pd.read_csv(f'{path}/data/LH_alpha/LH_alpha_shot_{shot}.csv')
+            df['shot'] = shot
+            df = df.iloc[:-100] #Drop last 100 rows, because sometimes RIS cameras don't end at the same time :C
+            
+            if exponential_elm_decay and use_ELMS:
+                df = _apply_exponential_elm_decay(df)
+                        
+            shot_df = pd.concat([shot_df, df], axis=0)
 
 
     df_mode = shot_df['mode'].copy()
@@ -222,6 +282,8 @@ def load_and_split_dataframes(path:Path, shots:list, shots_for_training:list, sh
     shot_df['mode'] = df_mode
     shot_df = shot_df.reset_index(drop=True) #each shot has its own indexing
 
+    # Only apply RIS2 filename replacement for single-camera RIS2 mode
+    # For 'both' mode, filenames are already handled per camera in the loop above
     if ris_option == 'RIS2':
         shot_df['filename'] = shot_df['filename'].str.replace('RIS1', 'RIS2')
 
@@ -638,6 +700,7 @@ def per_shot_test(path, shots: list, results_df: pd.DataFrame,
     Returns metrics of model for each shot separately
 
     Args: 
+        path: path where to save the results
         shots: list with numbers of shot to be tested on.
         model: ResNet model
         results_df: pd.DataFrame from confinement_mode_classifier.test_model().
@@ -646,7 +709,7 @@ def per_shot_test(path, shots: list, results_df: pd.DataFrame,
         conf_matrix_img: Image with confusion matrix
         combined_image: Combined image with three previous returns
     Returns:
-        path: Path where images are saved
+        metrics: Path where images are saved
     '''
     metrics = {'shot':[], 'f1':[], 'precision':[], 'recall':[], 'kappa':[]}
     

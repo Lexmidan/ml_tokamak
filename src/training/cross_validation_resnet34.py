@@ -73,148 +73,6 @@ def setup_cv_logging(log_dir: Path, fold_idx: int = None) -> logging.Logger:
     return logger
 
 
-def create_dataloaders_for_both_cameras(shots_for_training: pd.DataFrame,
-                                       shots_for_validation: pd.DataFrame, num_classes: int,
-                                       exponential_elm_decay: bool, batch_size: int, num_workers: int,
-                                       augmentation: bool, grayscale: bool, test_run: bool = False) -> Tuple[Dict, Dict, object]:
-    """
-    Create dataloaders for 'both' cameras, properly handling camera availability per shot.
-    No separate test set - validation set is used for evaluation.
-    
-    Returns:
-        Tuple of (dataloaders dict, dataset_sizes dict, validation_dataloader)
-    """
-    path = get_project_root()
-    logger = logging.getLogger('cross_validation')
-    logger.info("Creating dataloaders for 'both' cameras with proper camera availability handling...")
-    
-    # Load shot usage to determine camera availability
-    shot_usage = pd.read_csv(f'{path}/data/shot_usageNEW.csv')
-    shot_usage_dict = shot_usage.set_index('shot')[['used_for_ris1', 'used_for_ris2']].to_dict('index')
-    
-    # Combine all shots
-    all_shots = pd.concat([shots_for_training, shots_for_validation]).unique()
-    
-    # Load and combine dataframes from available cameras for each shot
-    combined_shot_df = pd.DataFrame()
-    
-    for shot in all_shots:
-        if shot not in shot_usage_dict:
-            logger.warning(f"Shot {shot} not found in shot_usageNEW.csv, skipping...")
-            continue
-            
-        shot_info = shot_usage_dict[shot]
-        
-        # Load RIS1 data if available
-        if shot_info['used_for_ris1']:
-            try:
-                df_ris1 = pd.read_csv(f'{path}/data/LH_alpha/LH_alpha_shot_{shot}.csv')
-                df_ris1['shot'] = shot
-                df_ris1 = df_ris1.iloc[:-100]  # Drop last 100 rows
-                combined_shot_df = pd.concat([combined_shot_df, df_ris1], axis=0)
-            except FileNotFoundError:
-                logger.warning(f"RIS1 data file not found for shot {shot}")
-        
-        # Load RIS2 data if available
-        if shot_info['used_for_ris2']:
-            try:
-                df_ris2 = pd.read_csv(f'{path}/data/LH_alpha/LH_alpha_shot_{shot}.csv')
-                df_ris2['shot'] = shot
-                df_ris2 = df_ris2.iloc[:-100]  # Drop last 100 rows
-                # Convert RIS1 filenames to RIS2
-                df_ris2['filename'] = df_ris2['filename'].str.replace('RIS1', 'RIS2')
-                
-                # Filter out rows where RIS2 image doesn't exist
-                def image_exists(filename):
-                    return os.path.exists(os.path.join(path, filename))
-                
-                exists_mask = df_ris2['filename'].apply(image_exists)
-                df_ris2 = df_ris2[exists_mask]
-                
-                combined_shot_df = pd.concat([combined_shot_df, df_ris2], axis=0)
-            except FileNotFoundError:
-                logger.warning(f"RIS2 data file not found for shot {shot}")
-    
-    # Apply exponential ELM decay if needed
-    if exponential_elm_decay and num_classes == 3:
-        # Apply the same ELM decay logic as in confinement_mode_classifier
-        combined_shot_df['soft_label'] = combined_shot_df.apply(
-            lambda x: [0, 1, 0] if x['mode'] == 'H-mode' else [1, 0, 0], axis=1)
-        
-        # Pre and post peak time processing for ELMs
-        pre_time = 1
-        post_time = 2
-        
-        for shot in combined_shot_df['shot'].unique():
-            shot_data = combined_shot_df[combined_shot_df['shot'] == shot]
-            
-            if shot_data['mode'].str.contains('ELM-peak').any():
-                for elm_peak in shot_data[shot_data['mode'] == 'ELM-peak']['time']:
-                    # Pre-ELM probabilities
-                    pre_indices = shot_data.loc[shot_data['time'].between(elm_peak-pre_time, elm_peak)].index
-                    if not pre_indices.empty:
-                        pre_elm_prob = np.exp(-5 * np.linspace(pre_time, 0, len(pre_indices)))
-                        for i, prob in zip(pre_indices, pre_elm_prob):
-                            combined_shot_df.at[i, 'soft_label'] = [0, 1 - np.max([prob, combined_shot_df.at[i, 'soft_label'][2]]), 
-                                                        np.max([prob, combined_shot_df.at[i, 'soft_label'][2]])]
-                    
-                    # Post-ELM probabilities
-                    post_indices = shot_data.loc[shot_data['time'].between(elm_peak, elm_peak+post_time)].index
-                    if not post_indices.empty:
-                        post_elm_prob = np.exp(-3 * np.linspace(0, post_time, len(post_indices)))
-                        for i, prob in zip(post_indices, post_elm_prob):
-                            combined_shot_df.at[i, 'soft_label'] = [0, 1 - np.max([prob, combined_shot_df.at[i, 'soft_label'][2]]), 
-                                                        np.max([prob, combined_shot_df.at[i, 'soft_label'][2]])]
-
-    # Convert mode labels to numeric
-    df_mode = combined_shot_df['mode'].copy()
-    df_mode[combined_shot_df['mode']=='L-mode'] = 0
-    df_mode[combined_shot_df['mode']=='H-mode'] = 1
-    df_mode[combined_shot_df['mode']=='ELM'] = 2 if num_classes == 3 else 1
-    combined_shot_df['mode'] = df_mode
-    combined_shot_df = combined_shot_df.reset_index(drop=True)
-    
-    # Apply fast test mode sampling if enabled
-    if test_run:
-        logger.info("ULTRA-FAST MODE: Sampling only 100 images per shot for both cameras...")
-        def sample_shot_data(df, max_rows_per_shot=100):
-            if len(df) == 0:
-                return df
-            sampled_dfs = []
-            for shot in df['shot'].unique():
-                shot_data = df[df['shot'] == shot]
-                if len(shot_data) > max_rows_per_shot:
-                    shot_data = shot_data.sample(n=max_rows_per_shot, random_state=42)
-                sampled_dfs.append(shot_data)
-            return pd.concat(sampled_dfs, ignore_index=True)
-        
-        combined_shot_df = sample_shot_data(combined_shot_df, 100)
-        logger.info(f"ULTRA-FAST MODE: Reduced combined data to {len(combined_shot_df)} samples")
-    
-    # Split into train/val dataframes (no test set)
-    val_df = combined_shot_df[combined_shot_df['shot'].isin(shots_for_validation)].reset_index(drop=True)
-    train_df = combined_shot_df[combined_shot_df['shot'].isin(shots_for_training)].reset_index(drop=True)
-    
-    logger.info(f"Combined dataframes created - Train: {len(train_df)}, Val: {len(val_df)}")
-    
-    # Create dataloaders
-    val_dataloader = cmc.get_dloader(val_df, path, batch_size, balance_data=False, 
-                                     shuffle=False, num_workers=num_workers, 
-                                     augmentation=False, grayscale=grayscale)
-
-    train_dataloader = cmc.get_dloader(train_df, path, batch_size, balance_data=True, 
-                                       shuffle=False, num_workers=num_workers, 
-                                       augmentation=augmentation, grayscale=grayscale)
-
-    dataloaders = {'train': train_dataloader, 'val': val_dataloader}
-    dataset_sizes = {x: len(dataloaders[x].dataset) for x in ['train', 'val']}
-    
-    logger.info(f"Dataloaders created successfully - Train: {dataset_sizes['train']} samples, "
-                f"Val: {dataset_sizes['val']} samples")
-    
-    return dataloaders, dataset_sizes, val_dataloader
-
-
 def load_all_shots_for_both_cameras(test_run: bool = False, data_frac: float = 1.0, 
                                    random_seed: int = 42) -> pd.Series:
     """
@@ -340,11 +198,12 @@ def run_single_fold(fold_idx: int, train_shots: pd.Series, val_shots: pd.Series,
     Returns:
         Dictionary containing metrics and results for this fold
     """
-    path = Path(os.getcwd())
+    project_root = get_project_root()
+    current_dir = Path(os.getcwd())
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
     
     # Setup logging for this fold
-    cv_results_dir = Path(f'{path}/cross_validation_results/{base_timestamp}')
+    cv_results_dir = Path(f'{current_dir}/cross_validation_results/{base_timestamp}')
     logger = setup_cv_logging(cv_results_dir, fold_idx)
     
     logger.info("="*50)
@@ -358,20 +217,54 @@ def run_single_fold(fold_idx: int, train_shots: pd.Series, val_shots: pd.Series,
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
-    # Create dataloaders for this fold
-    if config['ris_option'] == 'both':
-        dataloaders, dataset_sizes, val_dataloader = create_dataloaders_for_both_cameras(
-            path, train_shots, val_shots,
-            config['num_classes'], config['exponential_elm_decay'], 
-            config['batch_size'], config['num_workers'], config['augmentation'], config['grayscale'], 
-            config.get('test_run', False))
-    else:
-        # For single camera, we need to create a similar function or modify LH.create_dataloaders
-        # For now, let's assume we have a modified function
-        dataloaders, dataset_sizes, val_dataloader = LH.create_dataloaders_cv(
-            path, train_shots, val_shots,
-            config['ris_option'], config['num_classes'], config['exponential_elm_decay'], 
-            config['batch_size'], config['num_workers'], config['augmentation'], config['grayscale'])
+    # Create dataloaders for this fold using enhanced load_and_split_dataframes
+    # Combine shots for processing
+    all_shots = pd.concat([train_shots, val_shots]).unique()
+    
+    # Use the enhanced load_and_split_dataframes function that now handles 'both' cameras
+    shot_df, _, val_df, train_df = cmc.load_and_split_dataframes(
+        path=project_root, 
+        shots=all_shots,
+        shots_for_training=train_shots.values.tolist(),
+        shots_for_testing=[],  # No test set in CV
+        shots_for_validation=val_shots.values.tolist(),
+        use_ELMS=(config['num_classes'] == 3),
+        ris_option=config['ris_option'],
+        exponential_elm_decay=config['exponential_elm_decay']
+    )
+    
+    # Apply fast test mode sampling if enabled
+    if config.get('test_run', False):
+        logger.info("ULTRA-FAST MODE: Sampling only 100 images per shot...")
+        def sample_shot_data(df, max_rows_per_shot=100):
+            if len(df) == 0:
+                return df
+            sampled_dfs = []
+            for shot in df['shot'].unique():
+                shot_data = df[df['shot'] == shot]
+                if len(shot_data) > max_rows_per_shot:
+                    shot_data = shot_data.sample(n=max_rows_per_shot, random_state=42)
+                sampled_dfs.append(shot_data)
+            return pd.concat(sampled_dfs, ignore_index=True)
+        
+        train_df = sample_shot_data(train_df, 100)
+        val_df = sample_shot_data(val_df, 100)
+        logger.info(f"ULTRA-FAST MODE: Reduced to Train: {len(train_df)}, Val: {len(val_df)} samples")
+    
+    # Create dataloaders
+    val_dataloader = cmc.get_dloader(val_df, project_root, config['batch_size'], balance_data=False, 
+                                     shuffle=False, num_workers=config['num_workers'], 
+                                     augmentation=False, grayscale=config['grayscale'])
+
+    train_dataloader = cmc.get_dloader(train_df, project_root, config['batch_size'], balance_data=True, 
+                                       shuffle=False, num_workers=config['num_workers'], 
+                                       augmentation=config['augmentation'], grayscale=config['grayscale'])
+
+    dataloaders = {'train': train_dataloader, 'val': val_dataloader}
+    dataset_sizes = {x: len(dataloaders[x].dataset) for x in ['train', 'val']}
+    
+    logger.info(f"Dataloaders created successfully - Train: {dataset_sizes['train']} samples, "
+                f"Val: {dataset_sizes['val']} samples")
 
     # Setup model
     pretrained_model = torchvision.models.resnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
@@ -384,13 +277,13 @@ def run_single_fold(fold_idx: int, train_shots: pd.Series, val_shots: pd.Series,
     # Phase 1: Train only the fully connected layer
     logger.info(f"Fold {fold_idx + 1} - Phase 1: Training fully connected layer...")
     model = LH.train_phase(
-        model, dataloaders, dataset_sizes, fold_timestamp, path, 'last_fc',
+        model, dataloaders, dataset_sizes, fold_timestamp, current_dir, 'last_fc',
         config['num_epochs_for_fc'], config['learning_rate_min'], 
         config['learning_rate_max'], config['weight_decay'], freeze_backbone=True,
         base_dir='cross_validation_results')
 
     # Create CV results directory for this fold
-    cv_results_dir = Path(f'{path}/cross_validation_results/{base_timestamp}')
+    cv_results_dir = Path(f'{current_dir}/cross_validation_results/{base_timestamp}')
     cv_results_dir.mkdir(parents=True, exist_ok=True)
     
     fold_fc_dir = cv_results_dir / f'fold_{fold_idx + 1}_last_fc'
@@ -425,7 +318,7 @@ def run_single_fold(fold_idx: int, train_shots: pd.Series, val_shots: pd.Series,
     torch.cuda.empty_cache()
     
     model = LH.train_phase(
-        model, dataloaders, dataset_sizes, fold_timestamp, path, 'all_layers',
+        model, dataloaders, dataset_sizes, fold_timestamp, current_dir, 'all_layers',
         config['num_epochs_for_all_layers'], config['learning_rate_min'], 
         config['learning_rate_max'], config['weight_decay'], freeze_backbone=False,
         base_dir='cross_validation_results')
@@ -453,7 +346,7 @@ def run_single_fold(fold_idx: int, train_shots: pd.Series, val_shots: pd.Series,
     pd.DataFrame(per_shot_metrics).to_csv(fold_all_layers_dir / 'metrics_per_shot.csv')
 
     # The model is already saved by train_phase to the correct location
-    model_path = Path(f'{path}/cross_validation_results/{fold_timestamp}_all_layers/model.pt')
+    model_path = Path(f'{current_dir}/cross_validation_results/{fold_timestamp}_all_layers/model.pt')
 
     # Return results for this fold
     fold_results = {

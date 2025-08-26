@@ -1,5 +1,7 @@
 from pathlib import Path
 import random
+import datetime
+from time import time
 
 def get_project_root() -> Path:
     """
@@ -25,4 +27,4 @@ def gen_run_name():
             'playful', 'dark', 'charming', 'engaging', 'notable']
     nouns = ['cat', 'dog', 'fish', 'bird', 'lion', 'tiger', 'bear', 'wolf', 'fox', 'eagle', 
              'rock', 'tree', 'river', 'mountain', 'cloud', 'star', 'moon', 'sun']
-    return f"{random.choice(adjs)}_{random.choice(nouns)}"
+    return f"{datetime.fromtimestamp(time()).strftime("%y-%m-%d, %H-%M-%S ")}_{random.choice(adjs)}_{random.choice(nouns)}"
