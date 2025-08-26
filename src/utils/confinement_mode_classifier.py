@@ -295,7 +295,7 @@ def load_and_split_dataframes(path:Path, shots:list, shots_for_training:list, sh
     return shot_df, test_df, val_df, train_df
 
 
-def get_dloader(df: pd.DataFrame(), path: Path(), batch_size: int = 32, 
+def get_dloader(df: pd.DataFrame, path: Path, batch_size: int = 32, 
                 balance_data: bool = True, shuffle: bool = True,
                 second_img_opt: str = None, num_workers: int = 0, 
                 augmentation: bool = False, grayscale: bool = False):
